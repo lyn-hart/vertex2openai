@@ -147,6 +147,22 @@ curl -X POST http://localhost:8050/v1/chat/completions \
 
 `POST /v1/messages` accepts Anthropic Messages request shape and converts to Vertex Gemini. Use **native Gemini model names** (no `claude-*` aliases, no `[EXPRESS]` prefix). Bare names use Express keys when configured, otherwise SA. Optional: `[PAY]` (force SA), `-search`, `-nothinking`, `-max`.
 
+Thinking / effort → Gemini `thinking_budget`:
+
+| Input | Budget |
+|-------|--------|
+| `thinking.budget_tokens` | as-is |
+| effort `none` | 0 |
+| `minimal` | 512 |
+| `low` | 2048 |
+| `medium` (or `thinking: true` / `type=enabled`) | 8192 |
+| `high` | 16384 |
+| `xhigh` | 24576 |
+| `max` / `ultrathink` | 32768 |
+| `adaptive` | default (no budget set) |
+
+Effort may appear as `thinking.effort`, top-level `effort` / `thinking_effort` / `reasoning_effort`, or `output_config.effort`. Model suffixes `-nothinking` / `-max` override.
+
 ```bash
 # Non-streaming
 curl -sS -X POST http://localhost:8050/v1/messages \

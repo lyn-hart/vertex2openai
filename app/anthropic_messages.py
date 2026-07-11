@@ -435,30 +435,146 @@ def anthropic_tool_choice_to_gemini(tool_choice: Any) -> Optional[Dict[str, Any]
     return {"function_calling_config": config_dict}
 
 
+# Claude Code / Anthropic effort labels → Gemini thinking_budget tokens.
+# Gemini only exposes thinking_budget (int) + include_thoughts, not effort tiers.
+_EFFORT_TO_THINKING_BUDGET: Dict[str, int] = {
+    "none": 0,
+    "minimal": 512,
+    "low": 2048,
+    "medium": 8192,
+    "high": 16384,
+    "xhigh": 24576,
+    "max": 32768,
+    # aliases
+    "ultrathink": 32768,
+    "ultra": 32768,
+}
+
+
+def _effort_label_to_budget(label: Any) -> Optional[int]:
+    """Map effort-like string labels to a Gemini thinking_budget, or None if unknown."""
+    if not isinstance(label, str):
+        return None
+    key = label.strip().lower()
+    if not key:
+        return None
+    if key in _EFFORT_TO_THINKING_BUDGET:
+        return _EFFORT_TO_THINKING_BUDGET[key]
+    # Accept "effort=high" / "thinking=high" style leftovers
+    if "=" in key:
+        return _effort_label_to_budget(key.split("=", 1)[-1])
+    return None
+
+
 def _thinking_budget_from_anthropic(thinking: Any) -> Optional[int]:
-    """Return thinking budget tokens if explicitly configured, else None."""
+    """Return thinking budget tokens if explicitly configured, else None.
+
+    Accepts Anthropic/Claude Code shapes:
+      - true / false
+      - "enabled" / "disabled" / "adaptive"
+      - effort labels: low | medium | high | xhigh | max | minimal | none
+      - {"type": "enabled", "budget_tokens": N}
+      - {"type": "enabled", "effort": "high"}  (Claude Code style)
+      - {"type": "adaptive"} / {"type": "disabled"}
+    """
     if thinking is None:
         return None
     if isinstance(thinking, bool):
-        return 8192 if thinking else 0
+        return _EFFORT_TO_THINKING_BUDGET["medium"] if thinking else 0
+    if isinstance(thinking, (int, float)) and not isinstance(thinking, bool):
+        try:
+            return max(0, int(thinking))
+        except (TypeError, ValueError):
+            return None
     if isinstance(thinking, str):
-        low = thinking.lower()
-        if low in ("disabled", "none", "false"):
+        low = thinking.strip().lower()
+        if low in ("disabled", "none", "false", "off"):
             return 0
-        if low in ("enabled", "true", "adaptive"):
+        if low in ("enabled", "true", "on", "adaptive"):
             return None  # use model defaults with include_thoughts
+        effort_budget = _effort_label_to_budget(low)
+        if effort_budget is not None:
+            return effort_budget
         return None
     if isinstance(thinking, dict):
         ttype = (thinking.get("type") or "").lower()
-        if ttype in ("disabled", "none"):
+        if ttype in ("disabled", "none", "off"):
             return 0
         if ttype == "adaptive":
-            return None
+            # Prefer explicit effort/budget if present; otherwise leave default.
+            pass
+
+        # Explicit numeric budget wins.
         budget = thinking.get("budget_tokens")
-        try:
-            return int(budget) if budget is not None else None
-        except (TypeError, ValueError):
+        if budget is None:
+            budget = thinking.get("budget")
+        if budget is not None:
+            try:
+                return max(0, int(budget))
+            except (TypeError, ValueError):
+                pass
+
+        # Effort label on the thinking object (Claude Code / extended thinking).
+        for key in ("effort", "level", "thinking_effort", "reasoning_effort"):
+            if key in thinking:
+                effort_budget = _effort_label_to_budget(thinking.get(key))
+                if effort_budget is not None:
+                    return effort_budget
+
+        if ttype in ("enabled", "true", "on", ""):
+            # enabled without budget/effort → medium default
+            if ttype in ("enabled", "true", "on"):
+                return _EFFORT_TO_THINKING_BUDGET["medium"]
             return None
+        if ttype == "adaptive":
+            return None
+        # Unknown type but may still carry effort-only payload handled above
+        return None
+    return None
+
+
+def _effort_from_request(request: Any) -> Optional[int]:
+    """Pick up top-level effort fields Claude Code / clients may send outside thinking."""
+    for attr in (
+        "effort",
+        "thinking_effort",
+        "reasoning_effort",
+        "output_config",
+    ):
+        val = getattr(request, attr, None)
+        if val is None and hasattr(request, "model_extra") and isinstance(request.model_extra, dict):
+            val = request.model_extra.get(attr)
+        if val is None:
+            continue
+        if isinstance(val, dict):
+            # e.g. output_config: {effort: "high"} or {thinking: {type, budget_tokens}}
+            for key in ("effort", "level", "thinking_effort", "reasoning_effort"):
+                if key in val:
+                    budget = _effort_label_to_budget(val.get(key))
+                    if budget is not None:
+                        return budget
+            if "thinking" in val:
+                budget = _thinking_budget_from_anthropic(val.get("thinking"))
+                if budget is not None:
+                    return budget
+            if "budget_tokens" in val or "budget" in val:
+                budget = _thinking_budget_from_anthropic(val)
+                if budget is not None:
+                    return budget
+            continue
+        if isinstance(val, str):
+            budget = _effort_label_to_budget(val)
+            if budget is not None:
+                return budget
+            # allow full thinking-string forms
+            budget = _thinking_budget_from_anthropic(val)
+            if budget is not None:
+                return budget
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            try:
+                return max(0, int(val))
+            except (TypeError, ValueError):
+                continue
     return None
 
 
@@ -521,7 +637,10 @@ def create_anthropic_generation_config(
     if "gemini-2.5-flash-lite" in base_model_name or "image" in base_model_name:
         config["thinking_config"]["include_thoughts"] = False
 
+    # Priority: request.thinking → top-level effort fields → model suffix overrides
     anth_budget = _thinking_budget_from_anthropic(getattr(request, "thinking", None))
+    if anth_budget is None:
+        anth_budget = _effort_from_request(request)
     if anth_budget is not None:
         config["thinking_config"]["thinking_budget"] = anth_budget
         if anth_budget == 0:

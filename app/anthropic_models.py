@@ -25,4 +25,9 @@ class AnthropicMessagesRequest(BaseModel):
     tools: Optional[List[Any]] = None
     tool_choice: Any = None
     thinking: Any = None
+    # Claude Code / clients may send effort outside `thinking`
+    effort: Any = None
+    thinking_effort: Any = None
+    reasoning_effort: Any = None
+    output_config: Any = None
     container: Any = None
