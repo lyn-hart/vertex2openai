@@ -59,8 +59,9 @@ FAKE_STREAMING_ENABLED = os.environ.get("FAKE_STREAMING", "false").lower() == "t
 FAKE_STREAMING_INTERVAL_SECONDS = float(os.environ.get("FAKE_STREAMING_INTERVAL", "1.0"))
 
 # Upstream 429 retry settings. Retry count means retries after the first attempt.
-UPSTREAM_429_RETRY_COUNT = _get_int_env("UPSTREAM_429_RETRY_COUNT", 3, minimum=0)
-UPSTREAM_429_RETRY_INTERVAL_SECONDS = _get_float_env("UPSTREAM_429_RETRY_INTERVAL_SECONDS", 1.0, minimum=0.0)
+RETRY_COUNT = _get_int_env("RETRY_COUNT", 3, minimum=0)
+# Fixed interval between upstream 429 retries, in milliseconds.
+RETRY_INTERVAL_MS = _get_int_env("RETRY_INTERVAL_MS", 1000, minimum=0)
 
 # URL for the remote JSON file containing model lists
 MODELS_CONFIG_URL = os.environ.get("MODELS_CONFIG_URL", "https://raw.githubusercontent.com/ldsx163/vertex2openai/refs/heads/main/vertexModels.json")

@@ -136,18 +136,19 @@ def _is_upstream_429_error(exc: Exception) -> bool:
 
 
 async def _sleep_before_429_retry(exc: Exception, retry_number: int, model_name: str) -> None:
-    delay = app_config.UPSTREAM_429_RETRY_INTERVAL_SECONDS
+    delay_ms = app_config.RETRY_INTERVAL_MS
+    delay_seconds = delay_ms / 1000.0
     now = time.time()
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
     timestamp = f"{timestamp}.{int((now % 1) * 1000):03d}"
     print(
         f"WARNING: [{timestamp}] Upstream 429 for Gemini model '{model_name}'. "
-        f"Retrying {retry_number}/{app_config.UPSTREAM_429_RETRY_COUNT} "
-        f"after fixed interval {delay:.2f}s.",
+        f"Retrying {retry_number}/{app_config.RETRY_COUNT} "
+        f"after fixed interval {delay_ms}ms.",
         flush=True
     )
-    if delay > 0:
-        await asyncio.sleep(delay)
+    if delay_seconds > 0:
+        await asyncio.sleep(delay_seconds)
 
 
 def _log_429_retry_recovered(model_name: str, retry_number: int) -> None:
@@ -180,12 +181,67 @@ async def _generate_content_with_429_retries(
         except Exception as exc:
             if (
                 _is_upstream_429_error(exc)
-                and retry_number < app_config.UPSTREAM_429_RETRY_COUNT
+                and retry_number < app_config.RETRY_COUNT
             ):
                 retry_number += 1
                 await _sleep_before_429_retry(exc, retry_number, model_for_api_call)
                 continue
             raise
+
+
+async def generate_gemini_content(
+    gemini_client_instance: Any,
+    model_for_api_call: str,
+    contents: List[types.Content],
+    gen_config_dict: Dict[str, Any],
+):
+    """Non-streaming Gemini generate_content with 429 retries. Returns raw Gemini response."""
+    return await _generate_content_with_429_retries(
+        gemini_client_instance,
+        model_for_api_call,
+        contents,
+        gen_config_dict,
+    )
+
+
+async def stream_gemini_content(
+    gemini_client_instance: Any,
+    model_for_api_call: str,
+    contents: List[types.Content],
+    gen_config_dict: Dict[str, Any],
+):
+    """
+    Async generator of raw Gemini stream chunks with 429 retries before first chunk.
+
+    Yields chunk objects from generate_content_stream. Retries the whole stream
+    setup on upstream 429 until the first chunk has been yielded.
+    """
+    retry_number = 0
+    has_yielded_any_chunk = False
+    while True:
+        try:
+            stream_gen_obj = await gemini_client_instance.aio.models.generate_content_stream(
+                model=model_for_api_call,
+                contents=contents,
+                config=gen_config_dict,
+            )
+            async for chunk_item in stream_gen_obj:
+                if not has_yielded_any_chunk:
+                    _log_429_retry_recovered(model_for_api_call, retry_number)
+                has_yielded_any_chunk = True
+                yield chunk_item
+            return
+        except Exception as e_stream:
+            if (
+                _is_upstream_429_error(e_stream)
+                and not has_yielded_any_chunk
+                and retry_number < app_config.RETRY_COUNT
+            ):
+                retry_number += 1
+                await _sleep_before_429_retry(e_stream, retry_number, model_for_api_call)
+                continue
+            raise
+
 
 def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
     config: Dict[str, Any] = {}
@@ -540,7 +596,7 @@ async def execute_gemini_call(
                         if (
                             _is_upstream_429_error(e_stream_call)
                             and not has_yielded_any_chunk
-                            and retry_number < app_config.UPSTREAM_429_RETRY_COUNT
+                            and retry_number < app_config.RETRY_COUNT
                         ):
                             retry_number += 1
                             await _sleep_before_429_retry(e_stream_call, retry_number, model_to_call)

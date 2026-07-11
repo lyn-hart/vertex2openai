@@ -20,9 +20,20 @@ def validate_api_key(api_key_to_validate: str) -> bool:
 # API Key security scheme
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
 
+
+def _extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
+    """Extract raw token from Authorization header if it is a Bearer token."""
+    if not authorization:
+        return None
+    if authorization.startswith("Bearer "):
+        return authorization[len("Bearer "):].strip() or None
+    return None
+
+
 # Dependency for API key validation
 async def get_api_key(
     authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="x-api-key"),
     x_ip_token: Optional[str] = Header(None, alias="x-ip-token")
 ):
     # Check if Hugging Face auth is enabled
@@ -72,9 +83,17 @@ async def get_api_key(
                 detail=f"Access denied: x-ip-token indicates an unhandled error: '{error_in_token}'."
             )
     else:
-        # Fallback to Bearer token authentication if HUGGINGFACE env var is not "true"
-        if authorization is None:
-            detail_message = "Missing API key. Please include 'Authorization: Bearer YOUR_API_KEY' header."
+        # Prefer Authorization: Bearer when present (OpenAI clients + ANTHROPIC_AUTH_TOKEN).
+        # Fall back to x-api-key (Anthropic / Claude Code ANTHROPIC_API_KEY).
+        api_key = _extract_bearer_token(authorization)
+        if api_key is None and x_api_key:
+            api_key = x_api_key.strip() or None
+
+        if api_key is None:
+            detail_message = (
+                "Missing API key. Provide 'Authorization: Bearer YOUR_API_KEY' "
+                "or 'x-api-key: YOUR_API_KEY'."
+            )
             # Optionally, provide a hint if the HUGGINGFACE env var exists but is not "true"
             if os.getenv("HUGGINGFACE") is not None: # Check for existence, not value
                  detail_message += " (Note: HUGGINGFACE mode with x-ip-token is not currently active)."
@@ -82,22 +101,23 @@ async def get_api_key(
                 status_code=401,
                 detail=detail_message
             )
-        
-        # Check if the header starts with "Bearer "
-        if not authorization.startswith("Bearer "):
+
+        # If Authorization was present but not Bearer, and no usable x-api-key, reject format
+        if (
+            authorization is not None
+            and not authorization.startswith("Bearer ")
+            and not x_api_key
+        ):
             raise HTTPException(
                 status_code=401,
-                detail="Invalid API key format. Use 'Authorization: Bearer YOUR_API_KEY'"
+                detail="Invalid API key format. Use 'Authorization: Bearer YOUR_API_KEY' or 'x-api-key: YOUR_API_KEY'."
             )
-        
-        # Extract the API key
-        api_key = authorization.replace("Bearer ", "")
-        
+
         # Validate the API key
         if not validate_api_key(api_key): # Call local validate_api_key
             raise HTTPException(
                 status_code=401,
                 detail="Invalid API key"
             )
-        
+
         return api_key

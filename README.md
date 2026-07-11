@@ -16,6 +16,7 @@ The codebase is designed with modularity and maintainability in mind, located pr
 ## Key Features
 
 -   **OpenAI-Compatible Endpoints:** Provides standard [`/v1/chat/completions`](app/routes/chat_api.py:0) and [`/v1/models`](app/routes/models_api.py:0) endpoints.
+-   **Anthropic Messages (Claude Code):** Provides [`/v1/messages`](app/routes/messages_api.py) and [`/v1/messages/count_tokens`](app/routes/messages_api.py) for Claude Code / Anthropic SDK clients (Gemini-direct conversion).
 -   **Broad Model Support:** Seamlessly translates requests for various Gemini models (e.g., `gemini-1.5-pro-latest`, `gemini-1.5-flash-latest`). Check the [`/v1/models`](app/routes/models_api.py:0) endpoint for currently available models based on your Vertex AI Project.
 -   **Multiple Credential Management Methods:**
     -   **Vertex AI Express API Key:** Use a specific [`VERTEX_EXPRESS_API_KEY`](app/config.py:0) for simplified authentication with eligible models.
@@ -82,8 +83,8 @@ API_KEY="your_secure_api_key_here" # REQUIRED: Set a strong key for security
 # ROUNDROBIN="true"              # Enable round-robin for Service Accounts (Method 2 or 3)
 # FAKE_STREAMING="false"         # For debugging - simulate streaming
 # FAKE_STREAMING_INTERVAL="1.0"  # Interval for fake streaming keep-alives
-# UPSTREAM_429_RETRY_COUNT="3"   # Retries after an upstream 429 before returning an error; set 0 to disable
-# UPSTREAM_429_RETRY_INTERVAL_SECONDS="1.0" # Fixed interval between upstream 429 retries
+# RETRY_COUNT="3"   # Retries after an upstream 429 before returning an error; set 0 to disable
+# RETRY_INTERVAL_MS="1000" # Fixed interval between upstream 429 retries (milliseconds)
 # GCP_PROJECT_ID="your-gcp-project-id" # Explicitly set GCP Project ID if needed
 # GCP_LOCATION="us-central1"          # Explicitly set GCP Location if needed
 ```
@@ -104,17 +105,26 @@ The service will typically be available at `http://localhost:8050` (check your [
 ### Endpoints
 
 -   `GET /v1/models`: Lists models accessible via the configured credentials/Vertex project.
--   `POST /v1/chat/completions`: The main endpoint for generating text, mimicking the OpenAI chat completions API.
+-   `POST /v1/chat/completions`: OpenAI chat completions API.
+-   `POST /v1/messages`: Anthropic Messages API (Claude Code / Anthropic SDK). Streaming SSE and non-streaming.
+-   `POST /v1/messages/count_tokens`: Approximate input token count (local estimate).
 -   `GET /`: Basic health check/status endpoint.
 
 ### Authentication
 
-All requests to the adapter require an API key passed in the `Authorization` header:
+Requests require the adapter API key via either:
 
 ```
 Authorization: Bearer YOUR_API_KEY
 ```
-Replace `YOUR_API_KEY` with the value you set for the [`API_KEY`](app/config.py:0) environment variable.
+
+or (Anthropic / Claude Code style):
+
+```
+x-api-key: YOUR_API_KEY
+```
+
+Replace `YOUR_API_KEY` with the value you set for the [`API_KEY`](app/config.py:0) environment variable. When both headers are present, Bearer takes precedence.
 
 ### Example Request (`curl`)
 
@@ -133,7 +143,47 @@ curl -X POST http://localhost:8050/v1/chat/completions \
   }'
 ```
 
-*(Adjust URL and API Key as needed)*
+### Anthropic Messages / Claude Code
+
+`POST /v1/messages` accepts Anthropic Messages request shape and converts to Vertex Gemini. Use **native Gemini model names** (no `claude-*` aliases, no `[EXPRESS]` prefix). Bare names use Express keys when configured, otherwise SA. Optional: `[PAY]` (force SA), `-search`, `-nothinking`, `-max`.
+
+```bash
+# Non-streaming
+curl -sS -X POST http://localhost:8050/v1/messages \
+  -H "x-api-key: your_secure_api_key_here" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-2.5-flash",
+    "max_tokens": 256,
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+
+# Streaming (Anthropic SSE events)
+curl -N -X POST http://localhost:8050/v1/messages \
+  -H "Authorization: Bearer your_secure_api_key_here" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-2.5-flash",
+    "max_tokens": 256,
+    "stream": true,
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+```
+
+Point Claude Code at this adapter:
+
+```bash
+export ANTHROPIC_BASE_URL=http://localhost:8050
+export ANTHROPIC_API_KEY=your_secure_api_key_here   # or ANTHROPIC_AUTH_TOKEN for Bearer
+export ANTHROPIC_DEFAULT_SONNET_MODEL=gemini-2.5-pro
+export ANTHROPIC_DEFAULT_HAIKU_MODEL=gemini-2.5-flash
+export ANTHROPIC_DEFAULT_OPUS_MODEL=gemini-2.5-pro
+claude -p "say ok"
+```
+
+*(Adjust URL, API key, and model names as needed)*
 
 ## Credential Handling Priority
 
@@ -158,8 +208,8 @@ Managed in [`app/config.py`](app/config.py) and loaded from the environment:
 -   `GCP_LOCATION`: Optional. Explicitly set the Google Cloud Location (region). If not set, attempts to infer or uses Vertex AI defaults.
 -   `FAKE_STREAMING`: Optional. Set to `"true"` to simulate streaming output for testing. (Default: `"false"`)
 -   `FAKE_STREAMING_INTERVAL`: Optional. Interval (seconds) for keep-alive messages during fake streaming. (Default: `1.0`)
--   `UPSTREAM_429_RETRY_COUNT`: Optional. Number of retries after an upstream 429 before returning an error. (Default: `3`; set `0` to disable)
--   `UPSTREAM_429_RETRY_INTERVAL_SECONDS`: Optional. Fixed interval between upstream 429 retries. (Default: `1.0`)
+-   `RETRY_COUNT`: Optional. Number of retries after an upstream 429 before returning an error. (Default: `3`; set `0` to disable)
+-   `RETRY_INTERVAL_MS`: Optional. Fixed interval between upstream 429 retries, in milliseconds. (Default: `1000`)
 
 ## License
 

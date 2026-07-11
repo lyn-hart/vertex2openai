@@ -32,7 +32,6 @@ async def fetch_and_parse_models_config() -> Optional[Dict[str, List[str]]]:
                "vertex_express_models" in data and isinstance(data["vertex_express_models"], list):
                 print("Successfully fetched and parsed model configuration.")
                 
-                # Add [EXPRESS] prefix to express models
                 return {
                     "vertex_models": data["vertex_models"],
                     "vertex_express_models": data["vertex_express_models"]

@@ -19,9 +19,9 @@ services:
       # Interval for fake streaming keep-alive messages (default: 1.0)
       - FAKE_STREAMING_INTERVAL=1.0
       # Retry count for upstream 429 responses (default: 3, set 0 to disable)
-      - UPSTREAM_429_RETRY_COUNT=3
-      # Fixed interval between upstream 429 retries (default: 1.0)
-      - UPSTREAM_429_RETRY_INTERVAL_SECONDS=1.0
+      - RETRY_COUNT=3
+      # Fixed interval between upstream 429 retries in milliseconds (default: 1000)
+      - RETRY_INTERVAL_MS=1000
       # Remote model list URL
       - MODELS_CONFIG_URL=https://raw.githubusercontent.com/ldsx163/vertex2openai/refs/heads/main/vertexModels.json
     restart: unless-stopped

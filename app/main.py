@@ -11,6 +11,7 @@ import config as app_config
 # Routers
 from routes import models_api
 from routes import chat_api
+from routes import messages_api
 
 app = FastAPI(title="OpenAI to Gemini Adapter")
 
@@ -29,8 +30,9 @@ express_key_manager = ExpressKeyManager()
 app.state.express_key_manager = express_key_manager # Store express key manager on app state
 
 # Include API routers
-app.include_router(models_api.router) 
+app.include_router(models_api.router)
 app.include_router(chat_api.router)
+app.include_router(messages_api.router)
 
 @app.on_event("startup")
 async def startup_event():
@@ -46,8 +48,8 @@ async def startup_event():
     print(f"INFO: Express API keys loaded: {express_keys_count}")
     print(
         "INFO: Upstream 429 retry config: "
-        f"count={app_config.UPSTREAM_429_RETRY_COUNT}, "
-        f"fixed_interval_seconds={app_config.UPSTREAM_429_RETRY_INTERVAL_SECONDS}",
+        f"count={app_config.RETRY_COUNT}, "
+        f"fixed_interval_ms={app_config.RETRY_INTERVAL_MS}",
         flush=True
     )
     print(f"INFO: Total authentication methods available: {(1 if sa_count > 0 else 0) + (1 if express_keys_count > 0 else 0)}")
@@ -66,5 +68,11 @@ async def startup_event():
 async def root():
     return {
         "status": "ok",
-        "message": "OpenAI to Gemini Adapter is running."
+        "message": "OpenAI to Gemini Adapter is running.",
+        "endpoints": [
+            "GET /v1/models",
+            "POST /v1/chat/completions",
+            "POST /v1/messages",
+            "POST /v1/messages/count_tokens",
+        ],
     }
