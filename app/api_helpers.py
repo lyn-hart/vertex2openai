@@ -284,32 +284,27 @@ def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
     # config["thinking_config"] = {"include_thoughts": True}
 
     # 1. Add tools (function declarations)
+    # Prefer parameters_json_schema so richer JSON Schema fields from clients
+    # (propertyNames, exclusiveMinimum, etc.) do not fail typed Schema validation.
     function_declarations = []
     if request.tools:
         for tool in request.tools:
             if tool.get("type") == "function":
                 func_def = tool.get("function")
-                if func_def:
-                    # Extract only the fields accepted by the Gemini API
-                    declaration = {
-                        "name": func_def.get("name"),
-                        "description": func_def.get("description"),
-                    }
-                    # Get parameters and remove the $schema field if it exists
+                if func_def and func_def.get("name"):
+                    kwargs = {"name": func_def.get("name")}
+                    if func_def.get("description") is not None:
+                        kwargs["description"] = func_def.get("description")
                     parameters = func_def.get("parameters")
-                    if isinstance(parameters, dict) and "$schema" in parameters:
-                        parameters = parameters.copy()
-                        del parameters["$schema"]
-                    if parameters is not None:
-                        declaration["parameters"] = parameters
-
-                    # Remove keys with None values to keep the payload clean
-                    declaration = {k: v for k, v in declaration.items() if v is not None}
-                    if declaration.get("name"):  # Ensure name exists
-                        function_declarations.append(declaration)
+                    if isinstance(parameters, dict):
+                        cleaned = {k: v for k, v in parameters.items() if k not in ("$schema", "$id", "$comment")}
+                        kwargs["parameters_json_schema"] = cleaned
+                    elif parameters is not None:
+                        kwargs["parameters_json_schema"] = parameters
+                    function_declarations.append(types.FunctionDeclaration(**kwargs))
 
     if function_declarations:
-        config["tools"] = [{"function_declarations": function_declarations}]
+        config["tools"] = [types.Tool(function_declarations=function_declarations)]
 
     # 2. Add tool_config (based on tool_choice)
     tool_config = None

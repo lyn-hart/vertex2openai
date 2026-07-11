@@ -317,11 +317,48 @@ def create_anthropic_gemini_contents(
     return gemini_messages
 
 
-def anthropic_tools_to_gemini(tools: Optional[List[Any]]) -> List[Dict[str, Any]]:
-    """Convert Anthropic tools to Gemini function_declarations list."""
+def _sanitize_json_schema_for_gemini(schema: Any) -> Any:
+    """Drop keys that only confuse Gemini while keeping full JSON Schema shape.
+
+    Claude Code tools often include draft-07 fields (propertyNames, exclusiveMinimum,
+    $schema, etc.). Gemini's typed `Schema` rejects many of these, so we pass the
+    cleaned object via FunctionDeclaration.parameters_json_schema instead.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    out: Dict[str, Any] = {}
+    for key, value in schema.items():
+        if key in ("$schema", "$id", "$comment", "definitions"):
+            continue
+        if key == "$defs":
+            out["$defs"] = (
+                {k: _sanitize_json_schema_for_gemini(v) for k, v in value.items()}
+                if isinstance(value, dict)
+                else value
+            )
+            continue
+        if key == "properties" and isinstance(value, dict):
+            out[key] = {k: _sanitize_json_schema_for_gemini(v) for k, v in value.items()}
+            continue
+        if key in ("items", "additionalProperties", "not") and isinstance(value, dict):
+            out[key] = _sanitize_json_schema_for_gemini(value)
+            continue
+        if key in ("anyOf", "oneOf", "allOf", "prefixItems") and isinstance(value, list):
+            out[key] = [_sanitize_json_schema_for_gemini(v) for v in value]
+            continue
+        out[key] = value
+    return out
+
+
+def anthropic_tools_to_gemini(tools: Optional[List[Any]]) -> List[types.FunctionDeclaration]:
+    """Convert Anthropic tools to Gemini FunctionDeclaration list.
+
+    Uses parameters_json_schema so Claude Code's richer JSON Schemas (propertyNames,
+    exclusiveMinimum, additionalProperties objects, etc.) are accepted by the SDK.
+    """
     if not tools:
         return []
-    declarations: List[Dict[str, Any]] = []
+    declarations: List[types.FunctionDeclaration] = []
     for t in tools:
         if not isinstance(t, dict):
             continue
@@ -331,17 +368,15 @@ def anthropic_tools_to_gemini(tools: Optional[List[Any]]) -> List[Dict[str, Any]
             name = func_def.get("name")
             if not name:
                 continue
-            declaration: Dict[str, Any] = {
-                "name": name,
-                "description": func_def.get("description"),
-            }
             parameters = func_def.get("parameters")
-            if isinstance(parameters, dict) and "$schema" in parameters:
-                parameters = {k: v for k, v in parameters.items() if k != "$schema"}
-            if parameters is not None:
-                declaration["parameters"] = parameters
-            declaration = {k: v for k, v in declaration.items() if v is not None}
-            declarations.append(declaration)
+            kwargs: Dict[str, Any] = {"name": name}
+            if func_def.get("description") is not None:
+                kwargs["description"] = func_def.get("description")
+            if isinstance(parameters, dict):
+                kwargs["parameters_json_schema"] = _sanitize_json_schema_for_gemini(parameters)
+            elif parameters is not None:
+                kwargs["parameters_json_schema"] = parameters
+            declarations.append(types.FunctionDeclaration(**kwargs))
             continue
 
         # Anthropic custom tool: name + input_schema
@@ -349,17 +384,15 @@ def anthropic_tools_to_gemini(tools: Optional[List[Any]]) -> List[Dict[str, Any]
         if not name:
             # Built-in Anthropic tools without schemas (bash_*, web_search_*) — skip for Gemini
             continue
-        declaration = {
-            "name": name,
-            "description": t.get("description"),
-        }
         schema = t.get("input_schema") if t.get("input_schema") is not None else t.get("parameters")
-        if isinstance(schema, dict) and "$schema" in schema:
-            schema = {k: v for k, v in schema.items() if k != "$schema"}
-        if schema is not None:
-            declaration["parameters"] = schema
-        declaration = {k: v for k, v in declaration.items() if v is not None}
-        declarations.append(declaration)
+        kwargs = {"name": name}
+        if t.get("description") is not None:
+            kwargs["description"] = t.get("description")
+        if isinstance(schema, dict):
+            kwargs["parameters_json_schema"] = _sanitize_json_schema_for_gemini(schema)
+        elif schema is not None:
+            kwargs["parameters_json_schema"] = schema
+        declarations.append(types.FunctionDeclaration(**kwargs))
     return declarations
 
 
@@ -473,7 +506,7 @@ def create_anthropic_generation_config(
     function_declarations = anthropic_tools_to_gemini(getattr(request, "tools", None))
     tools_list: List[Any] = []
     if function_declarations:
-        tools_list.append({"function_declarations": function_declarations})
+        tools_list.append(types.Tool(function_declarations=function_declarations))
     if is_grounded_search:
         tools_list.append(types.Tool(google_search=types.GoogleSearch()))
     if tools_list:
