@@ -30,7 +30,13 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
 
         features = parse_model_features(request.model)
         base_model_name = features.base_model_name
-        is_grounded_search = features.is_grounded_search
+        # Grounded search: -search model suffix OR request-body params
+        # (search: true / web_search_options: {...}).
+        is_grounded_search = (
+            features.is_grounded_search
+            or request.search is True
+            or request.web_search_options is not None
+        )
         is_nothinking_model = features.is_nothinking_model
         is_max_thinking_model = features.is_max_thinking_model
 

@@ -372,6 +372,48 @@ def _convert_image_to_markdown(image_data: bytes, mime_type: str) -> str:
         logger.info(f"Error converting image to markdown: {e}")
         return "[Image could not be displayed]"
 
+def extract_grounding_citations(candidate: Any) -> str:
+    """
+    Extract Google Search grounding sources from a Gemini candidate.
+
+    Returns a markdown "Sources:" block ("" when the candidate carries no
+    grounding metadata). Handles both SDK objects and plain dicts.
+    """
+    metadata = getattr(candidate, "grounding_metadata", None)
+    if metadata is None and isinstance(candidate, dict):
+        metadata = candidate.get("grounding_metadata")
+    if not metadata:
+        return ""
+
+    chunks = getattr(metadata, "grounding_chunks", None)
+    if chunks is None and isinstance(metadata, dict):
+        chunks = metadata.get("grounding_chunks")
+    if not chunks:
+        return ""
+
+    def _get(obj: Any, key: str, default: Any = None) -> Any:
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    lines: List[str] = []
+    seen_uris: set = set()
+    for chunk in chunks:
+        web = _get(chunk, "web")
+        if not web:
+            continue
+        uri = _get(web, "uri")
+        if not uri or uri in seen_uris:
+            continue
+        seen_uris.add(uri)
+        title = _get(web, "title") or uri
+        lines.append(f"- [{title}]({uri})")
+
+    if not lines:
+        return ""
+    return "\n\n---\n**Sources:**\n" + "\n".join(lines)
+
+
 def parse_gemini_response_for_reasoning_and_content(gemini_response_candidate: Any) -> Tuple[str, str]:
     reasoning_text_parts = []
     normal_text_parts = []
@@ -477,6 +519,9 @@ def process_gemini_response_to_openai_dict(gemini_response_obj: Any, request_mod
             
             if not function_call_detected:
                 reasoning_str, normal_content_str = parse_gemini_response_for_reasoning_and_content(candidate)
+                citations = extract_grounding_citations(candidate)
+                if citations:
+                    normal_content_str = (normal_content_str or "") + citations
                 message_payload["content"] = normal_content_str
                 if reasoning_str:
                     message_payload['reasoning_content'] = reasoning_str
@@ -569,6 +614,12 @@ def convert_chunk_to_openai(chunk: Any, model_name: str, response_id: str, candi
 
         if not function_call_detected_in_chunk:
             reasoning_text, normal_text = parse_gemini_response_for_reasoning_and_content(candidate)
+
+            # Grounding metadata arrives on the terminal chunk; emit sources once there.
+            if openai_finish_reason is not None:
+                citations = extract_grounding_citations(candidate)
+                if citations:
+                    normal_text = (normal_text or "") + citations
 
             if reasoning_text: delta_payload['reasoning_content'] = reasoning_text
             if normal_text: # Only add content if it's non-empty

@@ -21,6 +21,7 @@ from translate_openai import (
     _build_function_response_part,
     _decode_tool_call_id_thought_signature,
     _encode_tool_call_id_with_thought_signature,
+    extract_grounding_citations,
     parse_gemini_response_for_reasoning_and_content,
 )
 
@@ -581,6 +582,14 @@ def _effort_from_request(request: Any) -> Optional[int]:
     return None
 
 
+def _request_has_web_search_tool(tools: Any) -> bool:
+    """True when the Anthropic request enables a built-in web_search_* tool."""
+    for t in tools or []:
+        if isinstance(t, dict) and str(t.get("type", "")).startswith("web_search"):
+            return True
+    return False
+
+
 def create_anthropic_generation_config(
     request: Any,
     *,
@@ -626,7 +635,7 @@ def create_anthropic_generation_config(
     tools_list: List[Any] = []
     if function_declarations:
         tools_list.append(types.Tool(function_declarations=function_declarations))
-    if is_grounded_search:
+    if is_grounded_search or _request_has_web_search_tool(getattr(request, "tools", None)):
         tools_list.append(types.Tool(google_search=types.GoogleSearch()))
     if tools_list:
         config["tools"] = tools_list
@@ -774,6 +783,9 @@ def gemini_response_to_anthropic(
                     )
 
         reasoning_str, normal_content_str = parse_gemini_response_for_reasoning_and_content(candidate)
+        citations = extract_grounding_citations(candidate)
+        if citations:
+            normal_content_str = (normal_content_str or "") + citations
         # Insert thinking/text before tool_use for more natural order
         text_blocks: List[Dict[str, Any]] = []
         if reasoning_str:
@@ -1061,6 +1073,7 @@ class GeminiAnthropicStreamAssembler:
         self.output_tokens = 0
         self._started = False
         self._tool_ids_emitted: set = set()
+        self._citations_emitted: bool = False
 
     def start_events(self) -> List[str]:
         self._started = True
@@ -1158,6 +1171,12 @@ class GeminiAnthropicStreamAssembler:
                     continue
 
         reasoning_str, normal_content_str = parse_gemini_response_for_reasoning_and_content(candidate)
+        # Grounding metadata arrives on the terminal chunk; emit sources once there.
+        if raw_finish is not None and not self._citations_emitted:
+            citations = extract_grounding_citations(candidate)
+            if citations:
+                self._citations_emitted = True
+                normal_content_str = (normal_content_str or "") + citations
         if reasoning_str:
             open_events, idx = self._ensure_block("thinking")
             events.extend(open_events)

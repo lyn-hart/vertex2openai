@@ -37,6 +37,11 @@ class OpenAIRequest(BaseModel):
     n: Optional[int] = None  # Maps to candidate_count in Vertex AI
     tools: Optional[List[Dict[str, Any]]] = None
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None
+    # Enable Google Search grounding without the -search model suffix.
+    # `search` is the simple switch; `web_search_options` matches OpenAI's
+    # newer responses-API parameter (its presence also enables search).
+    search: Optional[bool] = None
+    web_search_options: Optional[Dict[str, Any]] = None
 
     # Allow extra fields to pass through without causing validation errors
     model_config = ConfigDict(extra='allow')
