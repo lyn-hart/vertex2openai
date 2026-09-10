@@ -68,22 +68,28 @@ def apply_thinking_config(
     base_model_name: str,
 ) -> dict:
     """Apply thinking_config defaults. Thinking budget/level come from
-    request params only — no model-suffix overrides."""
+    request params only — no model-suffix overrides.
+
+    A thinking_budget of 0 already set by request params (thinking off)
+    is respected: include_thoughts stays False.
+    """
     if not isinstance(gen_config_dict.get("thinking_config"), dict):
         gen_config_dict["thinking_config"] = {}
 
-    if "gemini-2.5-flash" in base_model_name or "gemini-2.5-pro" in base_model_name:
-        gen_config_dict["thinking_config"]["include_thoughts"] = True
+    tc = gen_config_dict["thinking_config"]
 
-    if "gemini-2.5-flash-lite" in base_model_name:
-        gen_config_dict["thinking_config"]["include_thoughts"] = False
-
-    gen_config_dict["thinking_config"]["include_thoughts"] = True
-
-    if "gemini-2.5-flash-lite" in base_model_name or "image" in base_model_name:
-        gen_config_dict["thinking_config"]["include_thoughts"] = False
-    else:
-        gen_config_dict["thinking_config"]["include_thoughts"] = True
+    # Thinking explicitly disabled via request params (budget == 0):
+    # include_thoughts must stay False (Vertex rejects the combination).
+    thinking_off = tc.get("thinking_budget") == 0
+    if not thinking_off:
+        if "gemini-2.5-flash" in base_model_name or "gemini-2.5-pro" in base_model_name:
+            tc["include_thoughts"] = True
+        if "gemini-2.5-flash-lite" in base_model_name:
+            tc["include_thoughts"] = False
+        if "gemini-2.5-flash-lite" in base_model_name or "image" in base_model_name:
+            tc["include_thoughts"] = False
+        else:
+            tc["include_thoughts"] = True
 
     return gen_config_dict
 
