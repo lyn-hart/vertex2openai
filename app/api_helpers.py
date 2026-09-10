@@ -6,7 +6,6 @@ from typing import List, Dict, Any, Callable, Union, Optional
 
 from fastapi.responses import JSONResponse, StreamingResponse
 from google.genai import types
-from openai import AsyncOpenAI 
 
 
 from models import OpenAIRequest, OpenAIMessage
@@ -471,79 +470,6 @@ async def gemini_fake_stream_generator(
         yield f"data: {json_payload_error}\n\n"
         yield "data: [DONE]\n\n"
         return
-
-
-async def openai_fake_stream_generator( 
-    openai_client: Union[AsyncOpenAI, Any], 
-    openai_params: Dict[str, Any],
-    openai_extra_body: Dict[str, Any],
-    request_obj: OpenAIRequest,
-    is_auto_attempt: bool
-):
-    api_model_name = openai_params.get("model", "unknown-openai-model")
-    print(f"FAKE STREAMING (OpenAI Direct): Prep for '{request_obj.model}' (API model: '{api_model_name}')")
-    response_id = f"chatcmpl-openaidirectfake-{int(time.time())}"
-    
-    async def _openai_api_call_task():
-        params_for_call = openai_params.copy()
-        params_for_call['stream'] = False 
-        return await openai_client.chat.completions.create(**params_for_call, extra_body=openai_extra_body)
-
-    api_call_task = asyncio.create_task(_openai_api_call_task())
-    outer_keep_alive_interval = app_config.FAKE_STREAMING_INTERVAL_SECONDS
-    if outer_keep_alive_interval > 0:
-        while not api_call_task.done():
-            keep_alive_data = {"id": "chatcmpl-keepalive", "object": "chat.completion.chunk", "created": int(time.time()), "model": request_obj.model, "choices": [{"delta": {"content": ""}, "index": 0, "finish_reason": None}]}
-            yield f"data: {json.dumps(keep_alive_data)}\n\n"
-            await asyncio.sleep(outer_keep_alive_interval)
-
-    try:
-        raw_response_obj = await api_call_task 
-        openai_response_dict = raw_response_obj.model_dump(exclude_unset=True, exclude_none=True)
-
-        if app_config.SAFETY_SCORE and hasattr(raw_response_obj, "choices") and raw_response_obj.choices:
-            for i, choice_obj in enumerate(raw_response_obj.choices):
-                if hasattr(choice_obj, "safety_ratings") and choice_obj.safety_ratings:
-                    safety_html = _create_safety_ratings_html(choice_obj.safety_ratings)
-                    if i < len(openai_response_dict.get("choices", [])):
-                        choice_dict = openai_response_dict["choices"][i]
-                        message_dict = choice_dict.get("message")
-                        if message_dict:
-                            current_content = message_dict.get("content") or ""
-                            message_dict["content"] = current_content + safety_html
-
-        if openai_response_dict.get("choices") and \
-           isinstance(openai_response_dict["choices"], list) and \
-           len(openai_response_dict["choices"]) > 0:
-            
-            first_choice_dict_item = openai_response_dict["choices"]
-            if first_choice_dict_item and isinstance(first_choice_dict_item, dict) :
-                choice_message_ref = first_choice_dict_item.get("message", {})
-                original_content = choice_message_ref.get("content")
-                if isinstance(original_content, str):
-                    reasoning_text, actual_content = extract_reasoning_by_tags(original_content, VERTEX_REASONING_TAG)
-                    choice_message_ref["content"] = actual_content
-                    if reasoning_text:
-                        choice_message_ref["reasoning_content"] = reasoning_text
-        
-        async for chunk_sse in _chunk_openai_response_dict_for_sse(
-            openai_response_dict=openai_response_dict,
-            response_id_override=response_id, 
-            model_name_override=request_obj.model
-        ):
-            yield chunk_sse
-            
-    except Exception as e_outer: 
-        err_msg_detail = f"Error in openai_fake_stream_generator (model: '{request_obj.model}'): {type(e_outer).__name__} - {str(e_outer)}"
-        print(f"ERROR: {err_msg_detail}")
-        sse_err_msg_display = str(e_outer)
-        if len(sse_err_msg_display) > 512: sse_err_msg_display = sse_err_msg_display[:512] + "..."
-        err_resp_sse = create_openai_error_response(500, sse_err_msg_display, "server_error")
-        json_payload_error = json.dumps(err_resp_sse)
-        if not is_auto_attempt:
-            yield f"data: {json_payload_error}\n\n"
-            yield "data: [DONE]\n\n"
-        if is_auto_attempt: raise
 
 
 async def execute_gemini_call(

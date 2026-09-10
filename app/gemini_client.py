@@ -15,8 +15,6 @@ from google.genai import types
 from project_id_discovery import discover_project_id
 
 
-OPENAI_DIRECT_SUFFIX = "-openai"
-OPENAI_SEARCH_SUFFIX = "-openaisearch"
 EXPERIMENTAL_MARKER = "-exp-"
 PAY_PREFIX = "[PAY]"
 EXPRESS_PREFIX = "[EXPRESS] "  # trailing space for easier stripping
@@ -30,8 +28,6 @@ class ModelFeatures:
     base_model_name: str
     is_express_model_request: bool = False
     is_pay_model_request: bool = False
-    is_openai_direct_model: bool = False
-    is_openai_search_model: bool = False
     is_auto_model: bool = False
     is_grounded_search: bool = False
     is_encrypted_model: bool = False
@@ -44,19 +40,6 @@ class ModelFeatures:
 
 def parse_model_features(model: str) -> ModelFeatures:
     """Parse model name prefixes/suffixes used by this adapter."""
-    is_openai_direct_model = False
-    is_openai_search_model = False
-    if model.endswith(OPENAI_DIRECT_SUFFIX) or model.endswith(OPENAI_SEARCH_SUFFIX):
-        is_openai_search_model = model.endswith(OPENAI_SEARCH_SUFFIX)
-        suffix_to_remove = OPENAI_SEARCH_SUFFIX if is_openai_search_model else OPENAI_DIRECT_SUFFIX
-        temp_name_for_marker_check = model[: -len(suffix_to_remove)]
-        if (
-            temp_name_for_marker_check.startswith(PAY_PREFIX)
-            or temp_name_for_marker_check.startswith(EXPRESS_PREFIX)
-            or EXPERIMENTAL_MARKER in temp_name_for_marker_check
-        ):
-            is_openai_direct_model = True
-
     is_auto_model = model.endswith("-auto")
     is_grounded_search = model.endswith("-search")
     is_encrypted_model = model.endswith("-encrypt")
@@ -78,17 +61,7 @@ def parse_model_features(model: str) -> ModelFeatures:
         is_pay_model_request = True
         base_model_name = base_model_name[len(PAY_PREFIX) :]
 
-    if is_openai_direct_model:
-        suffix_to_remove = OPENAI_SEARCH_SUFFIX if is_openai_search_model else OPENAI_DIRECT_SUFFIX
-        temp_base_for_openai = model[: -len(suffix_to_remove)]
-        if temp_base_for_openai.startswith(EXPRESS_PREFIX):
-            is_express_model_request = True
-            temp_base_for_openai = temp_base_for_openai[len(EXPRESS_PREFIX) :]
-        if temp_base_for_openai.startswith(PAY_PREFIX):
-            is_pay_model_request = True
-            temp_base_for_openai = temp_base_for_openai[len(PAY_PREFIX) :]
-        base_model_name = temp_base_for_openai
-    elif is_auto_model:
+    if is_auto_model:
         base_model_name = base_model_name[: -len("-auto")]
     elif is_grounded_search:
         base_model_name = base_model_name[: -len("-search")]
@@ -110,8 +83,6 @@ def parse_model_features(model: str) -> ModelFeatures:
         base_model_name=base_model_name,
         is_express_model_request=is_express_model_request,
         is_pay_model_request=is_pay_model_request,
-        is_openai_direct_model=is_openai_direct_model,
-        is_openai_search_model=is_openai_search_model,
         is_auto_model=is_auto_model,
         is_grounded_search=is_grounded_search,
         is_encrypted_model=is_encrypted_model,
@@ -177,25 +148,16 @@ async def resolve_gemini_client(
     base_model_name: str,
     is_express_model_request: bool,
     express_key_manager: Any,
-    skip_if_openai_direct: bool = False,
-    is_openai_direct_model: bool = False,
     is_pay_model_request: bool = False,
 ) -> Optional[Any]:
     """
     Build a google.genai Client for Gemini using a Vertex Express API key.
 
-    Credential selection:
-    - Explicit [PAY] or legacy [EXPRESS] prefixes are still parsed but both
-      resolve to Express (the only available backend).
-
-    Returns None when skip_if_openai_direct and is_openai_direct_model are both True
-    (OpenAI Direct path handles its own client).
+    [PAY] and legacy [EXPRESS] prefixes are still parsed but both resolve
+    to Express (the only available backend).
 
     Raises GeminiClientError on auth/config failures.
     """
-    if skip_if_openai_direct and is_openai_direct_model:
-        return None
-
     client_to_use = None
     has_express = express_key_manager.get_total_keys() > 0
 

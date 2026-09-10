@@ -20,7 +20,6 @@ from api_helpers import (
     create_openai_error_response,
     execute_gemini_call,
 )
-from openai_handler import OpenAIDirectHandler
 from gemini_client import (
     parse_model_features,
     resolve_gemini_client,
@@ -37,8 +36,6 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
 
         features = parse_model_features(request.model)
         base_model_name = features.base_model_name
-        is_openai_direct_model = features.is_openai_direct_model
-        is_openai_search_model = features.is_openai_search_model
         is_auto_model = features.is_auto_model
         is_grounded_search = features.is_grounded_search
         is_encrypted_model = features.is_encrypted_model
@@ -60,42 +57,27 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
             gen_config_dict["thinking_config"]["include_thoughts"] = False
 
         client_to_use = None
+        try:
+            client_to_use = await resolve_gemini_client(
+                model=request.model,
+                base_model_name=base_model_name,
+                is_express_model_request=is_express_model_request,
+                is_pay_model_request=is_pay_model_request,
+                express_key_manager=express_key_manager_instance,
+            )
+        except GeminiClientError as e:
+            print(f"ERROR: {e.message}")
+            return JSONResponse(
+                status_code=e.status_code,
+                content=create_openai_error_response(e.status_code, e.message, e.error_type),
+            )
 
-        # This client initialization logic is for Gemini models (i.e., non-OpenAI Direct models).
-        # If 'is_openai_direct_model' is true, this section will be skipped, and the
-        # dedicated 'if is_openai_direct_model:' block later will handle it.
-        if not is_openai_direct_model:
-            try:
-                client_to_use = await resolve_gemini_client(
-                    model=request.model,
-                    base_model_name=base_model_name,
-                    is_express_model_request=is_express_model_request,
-                    is_pay_model_request=is_pay_model_request,
-                    express_key_manager=express_key_manager_instance,
-                )
-            except GeminiClientError as e:
-                print(f"ERROR: {e.message}")
-                return JSONResponse(
-                    status_code=e.status_code,
-                    content=create_openai_error_response(e.status_code, e.message, e.error_type),
-                )
-
-        # If we reach here and client_to_use is still None, it means it's an OpenAI Direct Model,
-        # which handles its own client and responses.
-        # For Gemini models (Express or SA), client_to_use must be set, or an error returned above.
-        if not is_openai_direct_model and client_to_use is None:
-             # This case should ideally not be reached if the logic above is correct,
-             # as each path (Express/SA for Gemini) should either set client_to_use or return an error.
-             # This is a safeguard.
+        # For Gemini models, client_to_use must be set, or an error returned above.
+        if client_to_use is None:
             print(f"CRITICAL ERROR: Client for Gemini model '{request.model}' was not initialized, and no specific error was returned. This indicates a logic flaw.")
             return JSONResponse(status_code=500, content=create_openai_error_response(500, "Critical internal server error: Gemini client not initialized.", "server_error"))
 
-        if is_openai_direct_model:
-            # Use the new OpenAI handler
-            # Express is the only backend; always route OpenAI-direct through it.
-            openai_handler = OpenAIDirectHandler(express_key_manager=express_key_manager_instance)
-            return await openai_handler.process_request(request, base_model_name, is_express=True, is_openai_search=is_openai_search_model)
-        elif is_auto_model:
+        if is_auto_model:
             print(f"Processing auto model: {request.model}")
             attempts = [
                 {"name": "base", "model": base_model_name, "prompt_func": create_gemini_prompt, "config_modifier": lambda c: c},

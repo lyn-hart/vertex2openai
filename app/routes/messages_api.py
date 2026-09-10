@@ -70,15 +70,6 @@ async def create_message(
 
     try:
         features = parse_model_features(request.model)
-        # Anthropic MVP does not support OpenAI-direct / encrypt / auto suffixes
-        if features.is_openai_direct_model:
-            return _anthropic_error_response(
-                f"Model '{request.model}' uses OpenAI-direct suffix which is not supported on /v1/messages. "
-                "Use a native Gemini model name (optionally with [PAY], -search, -nothinking, -max).",
-                status=400,
-                err_type="invalid_request_error",
-            )
-
         base_model_name = features.base_model_name
         express_key_manager = fastapi_request.app.state.express_key_manager
 

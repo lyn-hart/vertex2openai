@@ -10,9 +10,6 @@ router = APIRouter()
 async def list_models(fastapi_request: Request, api_key: str = Depends(get_api_key)):
     await refresh_models_config_cache()
 
-    OPENAI_DIRECT_SUFFIX = "-openai"
-    OPENAI_SEARCH_SUFFIX = "-openaisearch"
-
     express_key_manager_instance = fastapi_request.app.state.express_key_manager
 
     has_express_key = express_key_manager_instance.get_total_keys() > 0
@@ -34,10 +31,6 @@ async def list_models(fastapi_request: Request, api_key: str = Depends(get_api_k
             suffixes.extend(["-nothinking", "-max"])
         if ("gemini-3-pro-image") in base_id:
             suffixes.extend(["-2k", "-4k"])
-
-        # Add the openai variant for all models
-        suffixes.append(OPENAI_DIRECT_SUFFIX)
-        suffixes.append(OPENAI_SEARCH_SUFFIX)
 
         for suffix in suffixes:
             model_id_with_suffix = f"{base_id}{suffix}"
