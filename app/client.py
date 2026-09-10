@@ -35,8 +35,6 @@ class ModelFeatures:
     original_model: str
     base_model_name: str
     is_grounded_search: bool = False
-    is_nothinking_model: bool = False
-    is_max_thinking_model: bool = False
     is_2k_image_model: bool = False
     is_4k_image_model: bool = False
 
@@ -44,8 +42,6 @@ class ModelFeatures:
 def parse_model_features(model: str) -> ModelFeatures:
     """Parse model name suffixes used by this adapter."""
     is_grounded_search = model.endswith("-search")
-    is_nothinking_model = model.endswith("-nothinking")
-    is_max_thinking_model = model.endswith("-max")
     is_2k_image_model = model.endswith("-2k")
     is_4k_image_model = model.endswith("-4k")
 
@@ -53,10 +49,6 @@ def parse_model_features(model: str) -> ModelFeatures:
 
     if is_grounded_search:
         base_model_name = base_model_name[: -len("-search")]
-    elif is_nothinking_model:
-        base_model_name = base_model_name[: -len("-nothinking")]
-    elif is_max_thinking_model:
-        base_model_name = base_model_name[: -len("-max")]
     elif is_2k_image_model:
         base_model_name = base_model_name[: -len("-2k")]
     elif is_4k_image_model:
@@ -66,8 +58,6 @@ def parse_model_features(model: str) -> ModelFeatures:
         original_model=model,
         base_model_name=base_model_name,
         is_grounded_search=is_grounded_search,
-        is_nothinking_model=is_nothinking_model,
-        is_max_thinking_model=is_max_thinking_model,
         is_2k_image_model=is_2k_image_model,
         is_4k_image_model=is_4k_image_model,
     )
@@ -76,11 +66,9 @@ def parse_model_features(model: str) -> ModelFeatures:
 def apply_thinking_config(
     gen_config_dict: dict,
     base_model_name: str,
-    *,
-    is_nothinking_model: bool = False,
-    is_max_thinking_model: bool = False,
 ) -> dict:
-    """Apply thinking_config defaults and -nothinking/-max overrides."""
+    """Apply thinking_config defaults. Thinking budget/level come from
+    request params only — no model-suffix overrides."""
     if not isinstance(gen_config_dict.get("thinking_config"), dict):
         gen_config_dict["thinking_config"] = {}
 
@@ -92,21 +80,10 @@ def apply_thinking_config(
 
     gen_config_dict["thinking_config"]["include_thoughts"] = True
 
-    if "gemini-2.5-flash-lite" in base_model_name and is_max_thinking_model:
-        gen_config_dict["thinking_config"]["include_thoughts"] = True
-    elif "gemini-2.5-flash-lite" in base_model_name or "image" in base_model_name:
+    if "gemini-2.5-flash-lite" in base_model_name or "image" in base_model_name:
         gen_config_dict["thinking_config"]["include_thoughts"] = False
     else:
         gen_config_dict["thinking_config"]["include_thoughts"] = True
-
-    if is_nothinking_model or is_max_thinking_model:
-        if is_nothinking_model:
-            budget = 128 if ("gemini-2.5-pro" in base_model_name or "gemini-3-pro" in base_model_name) else 0
-        else:
-            budget = 32768 if ("gemini-2.5-pro" in base_model_name or "gemini-3-pro" in base_model_name) else 24576
-        gen_config_dict["thinking_config"]["thinking_budget"] = budget
-        if budget == 0:
-            gen_config_dict["thinking_config"]["include_thoughts"] = False
 
     return gen_config_dict
 

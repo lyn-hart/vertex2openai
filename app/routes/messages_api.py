@@ -77,8 +77,6 @@ async def create_message(
             request,
             base_model_name=base_model_name,
             is_grounded_search=features.is_grounded_search,
-            is_nothinking_model=features.is_nothinking_model,
-            is_max_thinking_model=features.is_max_thinking_model,
         )
 
         logger.info(f"/v1/messages model='{request.model}' base='{base_model_name}' "

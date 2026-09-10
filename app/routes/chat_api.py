@@ -37,8 +37,6 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
             or request.search is True
             or request.web_search_options is not None
         )
-        is_nothinking_model = features.is_nothinking_model
-        is_max_thinking_model = features.is_max_thinking_model
 
         # This will now be a dictionary
         gen_config_dict = create_generation_config(request)
@@ -82,12 +80,7 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
                     types.Tool(google_search=types.GoogleSearch())
                 )
 
-        apply_thinking_config(
-            gen_config_dict,
-            base_model_name,
-            is_nothinking_model=is_nothinking_model,
-            is_max_thinking_model=is_max_thinking_model,
-        )
+        apply_thinking_config(gen_config_dict, base_model_name)
 
         return await execute_gemini_call(express_key_manager_instance, base_model_name, current_prompt_func, gen_config_dict, request)
 

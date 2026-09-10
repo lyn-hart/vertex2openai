@@ -61,8 +61,6 @@ The model list comes from `MODELS_CONFIG_URL` (or the built-in fallback in [`app
 | Suffix | Effect |
 |---|---|
 | `-search` | Enable Google Search grounding |
-| `-nothinking` | Disable thinking (budget 0 / 128) |
-| `-max` | Max thinking budget (24576 / 32768) |
 | `-2k`, `-4k` | Image output resolution (gemini-3-pro-image only) |
 
 The `[PAY]`, `[EXPRESS]` prefixes and `-encrypt`, `-encrypt-full`, `-auto`, `-openai`, `-openaisearch` suffixes are no longer recognized.
@@ -74,6 +72,11 @@ The `[PAY]`, `[EXPRESS]` prefixes and `-encrypt`, `-encrypt-full`, `-auto`, `-op
 ```
 
 `web_search_options: {...}` (OpenAI's parameter) also enables it. On `/v1/messages`, include an Anthropic `web_search_*` tool in the `tools` array. When search grounding runs, the response text is appended with a markdown **Sources:** list of the retrieved pages.
+
+**Thinking control (request-body params)** — the `-nothinking` and `-max` model suffixes have been removed; control thinking per-request instead:
+
+- OpenAI path (`/v1/chat/completions`): `reasoning_effort` (label: `none|minimal|low|medium|high|xhigh|max`) or `thinking_budget` (token number, 0 disables). A numeric budget overrides the label.
+- Anthropic path (`/v1/messages`): `thinking: {type: "enabled", budget_tokens: N}` or `thinking: {type: "enabled", effort: "..."}` (Claude Code style); top-level effort fields are also accepted.
 
 **Known upstream limitation:** the Vertex endpoint does not serve Google Search grounding together with function calling — when a request carries both, the search tool is dropped and the model only sees the functions (a WARNING is logged server-side). Ask for search only in requests without function tools.
 

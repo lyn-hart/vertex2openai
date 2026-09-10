@@ -25,12 +25,14 @@ async def list_models(fastapi_request: Request, api_key: str = Depends(get_api_k
 
         # Define all possible suffixes for a given model
         suffixes = [""] # For the base model itself
-        if not base_id.startswith("gemini-2.0"):
-            suffixes.extend(["-search"])
-        if ("gemini-2.5-flash" in base_id or "gemini-2.5-pro" == base_id or "gemini-2.5-pro-preview-06-05" == base_id or "gemini-3-pro" in base_id) and "gemini-2.5-flash-image" not in base_id:
-            suffixes.extend(["-nothinking", "-max"])
-        if ("gemini-3-pro-image") in base_id:
-            suffixes.extend(["-2k", "-4k"])
+        if "image" in base_id:
+            # Image models only take resolution suffixes, never
+            # -search / -nothinking / -max.
+            if "gemini-3-pro-image" in base_id:
+                suffixes.extend(["-2k", "-4k"])
+        else:
+            if not base_id.startswith("gemini-2.0"):
+                suffixes.extend(["-search"])
 
         for suffix in suffixes:
             model_id_with_suffix = f"{base_id}{suffix}"

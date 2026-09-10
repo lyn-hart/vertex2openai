@@ -599,8 +599,6 @@ def create_anthropic_generation_config(
     *,
     base_model_name: str,
     is_grounded_search: bool = False,
-    is_nothinking_model: bool = False,
-    is_max_thinking_model: bool = False,
 ) -> Dict[str, Any]:
     """Build Gemini generation config dict from Anthropic Messages request."""
     config: Dict[str, Any] = {}
@@ -674,18 +672,6 @@ def create_anthropic_generation_config(
     if anth_budget is not None:
         config["thinking_config"]["thinking_budget"] = anth_budget
         if anth_budget == 0:
-            config["thinking_config"]["include_thoughts"] = False
-        else:
-            config["thinking_config"]["include_thoughts"] = True
-
-    # Model suffix overrides take precedence
-    if is_nothinking_model or is_max_thinking_model:
-        if is_nothinking_model:
-            budget = 128 if ("gemini-2.5-pro" in base_model_name or "gemini-3-pro" in base_model_name) else 0
-        else:
-            budget = 32768 if ("gemini-2.5-pro" in base_model_name or "gemini-3-pro" in base_model_name) else 24576
-        config["thinking_config"]["thinking_budget"] = budget
-        if budget == 0:
             config["thinking_config"]["include_thoughts"] = False
         else:
             config["thinking_config"]["include_thoughts"] = True

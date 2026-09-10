@@ -42,6 +42,10 @@ class OpenAIRequest(BaseModel):
     # newer responses-API parameter (its presence also enables search).
     search: Optional[bool] = None
     web_search_options: Optional[Dict[str, Any]] = None
+    # Thinking control: effort label (minimal|low|medium|high|xhigh|max) or
+    # an explicit token budget. Both map to Gemini thinking_config.
+    reasoning_effort: Optional[str] = None
+    thinking_budget: Optional[int] = None
 
     # Allow extra fields to pass through without causing validation errors
     model_config = ConfigDict(extra='allow')

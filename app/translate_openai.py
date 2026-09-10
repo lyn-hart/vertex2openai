@@ -655,9 +655,43 @@ def create_openai_error_response(status_code: int, message: str, error_type: str
     return {"error": {"message": message, "type": error_type, "code": status_code, "param": None}}
 
 
+# Effort labels shared with the Anthropic path (translate_anthropic.py).
+_EFFORT_TO_THINKING_BUDGET: Dict[str, int] = {
+    "none": 0,
+    "minimal": 512,
+    "low": 2048,
+    "medium": 8192,
+    "high": 16384,
+    "xhigh": 24576,
+    "max": 32768,
+    "ultrathink": 32768,
+    "ultra": 32768,
+}
+
+
+def _apply_thinking_params(request: OpenAIRequest, config: Dict[str, Any]) -> None:
+    """Map request-body thinking params (reasoning_effort / thinking_budget)
+    into the Gemini thinking_config. Explicit numeric budgets win over labels."""
+    if request.thinking_budget is not None:
+        budget = max(0, int(request.thinking_budget))
+    elif request.reasoning_effort is not None:
+        budget = _EFFORT_TO_THINKING_BUDGET.get(str(request.reasoning_effort).strip().lower())
+        if budget is None:
+            logger.warning("Unknown reasoning_effort %r; ignoring.", request.reasoning_effort)
+            return
+    else:
+        return
+    config.setdefault("thinking_config", {})
+    config["thinking_config"]["thinking_budget"] = budget
+    config["thinking_config"]["include_thoughts"] = budget > 0
+
+
 def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
     config: Dict[str, Any] = {}
-    
+
+    # Request-body thinking params -> thinking_config
+    _apply_thinking_params(request, config)
+
     # Check for -2k or -4k suffix to add image generation capabilities
     model_name = request.model
     if model_name.endswith('-2k'):
