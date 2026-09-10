@@ -19,7 +19,6 @@ from api_helpers import (
     StreamingReasoningProcessor
 )
 from message_processing import extract_reasoning_by_tags
-from credentials_manager import _refresh_auth
 from project_id_discovery import discover_project_id
 
 
@@ -139,8 +138,7 @@ class ExpressClientWrapper:
 class OpenAIDirectHandler:
     """Handles OpenAI Direct mode operations including client creation and response processing."""
     
-    def __init__(self, credential_manager=None, express_key_manager=None):
-        self.credential_manager = credential_manager
+    def __init__(self, express_key_manager=None):
         self.express_key_manager = express_key_manager
         safety_threshold = "BLOCK_NONE"
         self.safety_settings = [
@@ -157,33 +155,6 @@ class OpenAIDirectHandler:
             {"category": 'HARM_CATEGORY_JAILBREAK', "threshold": safety_threshold}
         ]
 
-    def create_openai_client(self, project_id: str, gcp_token: str, location: str = "global") -> openai.AsyncOpenAI:
-        """Create an OpenAI client configured for Vertex AI endpoint."""
-        endpoint_url = (
-            f"https://aiplatform.googleapis.com/v1beta1/"
-            f"projects/{project_id}/locations/{location}/endpoints/openapi"
-        )
-        
-        proxies = None
-        if app_config.PROXY_URL:
-            if app_config.PROXY_URL.startswith("socks"):
-                proxies = {"all://": app_config.PROXY_URL}
-            else:
-                proxies = {"https://": app_config.PROXY_URL}
-
-        client_args = {}
-        if proxies:
-            client_args['proxies'] = proxies
-        if app_config.SSL_CERT_FILE:
-            client_args['verify'] = app_config.SSL_CERT_FILE
-        
-        http_client = httpx.AsyncClient(**client_args) if client_args else None
-        return openai.AsyncOpenAI(
-            base_url=endpoint_url,
-            api_key=gcp_token,  # OAuth token
-            http_client=http_client,
-        )
-    
     def prepare_openai_params(self, request: OpenAIRequest, model_id: str, is_openai_search: bool = False) -> Dict[str, Any]:
         """
         Prepare parameters for OpenAI API call by converting the request to a dictionary,
@@ -467,20 +438,6 @@ class OpenAIDirectHandler:
                 
                 client = ExpressClientWrapper(project_id=project_id, api_key=express_api_key)
                 print(f"INFO: [OpenAI Express Path] Using ExpressClientWrapper for project: {project_id}")
-
-            else: # Standard SA-based OpenAI SDK Path
-                if not self.credential_manager:
-                    raise Exception("Standard OpenAI Direct mode requires a CredentialManager.")
-
-                rotated_credentials, rotated_project_id = self.credential_manager.get_credentials()
-                if not rotated_credentials or not rotated_project_id:
-                    raise Exception("OpenAI Direct Mode requires GCP credentials, but none were available.")
-
-                print(f"INFO: [OpenAI Direct Path] Using credentials for project: {rotated_project_id}")
-                gcp_token = _refresh_auth(rotated_credentials)
-                if not gcp_token:
-                    raise Exception(f"Failed to obtain valid GCP token for OpenAI client (Project: {rotated_project_id}).")
-                client = self.create_openai_client(rotated_project_id, gcp_token)
 
             model_id = f"google/{base_model_name}"
             openai_params = self.prepare_openai_params(request, model_id, is_openai_search)

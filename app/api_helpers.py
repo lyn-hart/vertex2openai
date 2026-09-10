@@ -5,7 +5,6 @@ import asyncio
 from typing import List, Dict, Any, Callable, Union, Optional
 
 from fastapi.responses import JSONResponse, StreamingResponse
-from google.auth.transport.requests import Request as AuthRequest
 from google.genai import types
 from openai import AsyncOpenAI 
 

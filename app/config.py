@@ -41,12 +41,6 @@ API_KEY = os.environ.get("API_KEY", DEFAULT_PASSWORD)
 HUGGINGFACE = os.environ.get("HUGGINGFACE", "false").lower() == "true"
 HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "") # Default to empty string, auth logic will verify if HF_MODE is true and this key is needed
 
-# Directory for service account credential files
-CREDENTIALS_DIR = os.environ.get("CREDENTIALS_DIR", "/app/credentials")
-
-# JSON string for service account credentials (can be one or multiple comma-separated)
-GOOGLE_CREDENTIALS_JSON_STR = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-
 # API Key for Vertex Express Mode
 raw_vertex_keys = os.environ.get("VERTEX_EXPRESS_API_KEY")
 if raw_vertex_keys:

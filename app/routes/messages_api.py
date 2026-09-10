@@ -80,7 +80,6 @@ async def create_message(
             )
 
         base_model_name = features.base_model_name
-        credential_manager = fastapi_request.app.state.credential_manager
         express_key_manager = fastapi_request.app.state.express_key_manager
 
         try:
@@ -89,7 +88,6 @@ async def create_message(
                 base_model_name=base_model_name,
                 is_express_model_request=features.is_express_model_request,
                 is_pay_model_request=features.is_pay_model_request,
-                credential_manager=credential_manager,
                 express_key_manager=express_key_manager,
             )
         except GeminiClientError as e:

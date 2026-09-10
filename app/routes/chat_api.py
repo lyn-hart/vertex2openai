@@ -33,7 +33,6 @@ router = APIRouter()
 @router.post("/v1/chat/completions")
 async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api_key: str = Depends(get_api_key)):
     try:
-        credential_manager_instance = fastapi_request.app.state.credential_manager
         express_key_manager_instance = fastapi_request.app.state.express_key_manager
 
         features = parse_model_features(request.model)
@@ -72,7 +71,6 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
                     base_model_name=base_model_name,
                     is_express_model_request=is_express_model_request,
                     is_pay_model_request=is_pay_model_request,
-                    credential_manager=credential_manager_instance,
                     express_key_manager=express_key_manager_instance,
                 )
             except GeminiClientError as e:
@@ -94,20 +92,9 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
 
         if is_openai_direct_model:
             # Use the new OpenAI handler
-            # Bare names prefer Express when keys exist; explicit [PAY] forces SA.
-            use_express_for_openai = (
-                is_express_model_request
-                or (
-                    not is_pay_model_request
-                    and express_key_manager_instance.get_total_keys() > 0
-                )
-            )
-            if use_express_for_openai:
-                openai_handler = OpenAIDirectHandler(express_key_manager=express_key_manager_instance)
-                return await openai_handler.process_request(request, base_model_name, is_express=True, is_openai_search=is_openai_search_model)
-            else:
-                openai_handler = OpenAIDirectHandler(credential_manager=credential_manager_instance)
-                return await openai_handler.process_request(request, base_model_name, is_openai_search=is_openai_search_model)
+            # Express is the only backend; always route OpenAI-direct through it.
+            openai_handler = OpenAIDirectHandler(express_key_manager=express_key_manager_instance)
+            return await openai_handler.process_request(request, base_model_name, is_express=True, is_openai_search=is_openai_search_model)
         elif is_auto_model:
             print(f"Processing auto model: {request.model}")
             attempts = [

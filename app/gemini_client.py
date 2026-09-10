@@ -176,19 +176,17 @@ async def resolve_gemini_client(
     model: str,
     base_model_name: str,
     is_express_model_request: bool,
-    credential_manager: Any,
     express_key_manager: Any,
     skip_if_openai_direct: bool = False,
     is_openai_direct_model: bool = False,
     is_pay_model_request: bool = False,
 ) -> Optional[Any]:
     """
-    Build a google.genai Client for Gemini (Express or SA).
+    Build a google.genai Client for Gemini using a Vertex Express API key.
 
     Credential selection:
-    - Explicit [PAY] → SA only
-    - Explicit legacy [EXPRESS] → Express only
-    - Bare model name → Express if keys are configured, else SA
+    - Explicit [PAY] or legacy [EXPRESS] prefixes are still parsed but both
+      resolve to Express (the only available backend).
 
     Returns None when skip_if_openai_direct and is_openai_direct_model are both True
     (OpenAI Direct path handles its own client).
@@ -200,90 +198,55 @@ async def resolve_gemini_client(
 
     client_to_use = None
     has_express = express_key_manager.get_total_keys() > 0
-    # Explicit [PAY] → SA; explicit legacy [EXPRESS] → Express; bare name → Express if available.
-    if is_pay_model_request and not is_express_model_request:
-        use_express = False
-    elif is_express_model_request:
-        use_express = True
-    else:
-        use_express = has_express
 
-    if use_express:
-        if not has_express:
-            raise GeminiClientError(
-                f"Model '{model}' requires an Express API key, but none are configured.",
-                status_code=401,
-                error_type="authentication_error",
-            )
+    if not has_express:
+        raise GeminiClientError(
+            f"Model '{model}' requires an Express API key, but none are configured.",
+            status_code=401,
+            error_type="authentication_error",
+        )
 
-        print(f"INFO: Attempting Vertex Express Mode for model request: {model} (base: {base_model_name})")
-        total_keys = express_key_manager.get_total_keys()
-        for attempt in range(total_keys):
-            key_tuple = express_key_manager.get_express_api_key()
-            if key_tuple:
-                original_idx, key_val = key_tuple
-                try:
-                    if "gemini-2.5-pro" in base_model_name or "gemini-2.5-flash" in base_model_name:
-                        project_id = await discover_project_id(key_val)
-                        base_url = f"https://aiplatform.googleapis.com/v1/projects/{project_id}/locations/global"
-                        client_to_use = genai.Client(
-                            vertexai=True,
-                            api_key=key_val,
-                            http_options=types.HttpOptions(base_url=base_url),
-                        )
-                        client_to_use._api_client._http_options.api_version = None
-                        print(
-                            f"INFO: Attempt {attempt + 1}/{total_keys} - Using Vertex Express Mode with custom base URL "
-                            f"for model {model} (base: {base_model_name}) with API key (original index: {original_idx})."
-                        )
-                    else:
-                        client_to_use = genai.Client(vertexai=True, api_key=key_val)
-                        print(
-                            f"INFO: Attempt {attempt + 1}/{total_keys} - Using Vertex Express Mode SDK "
-                            f"for model {model} (base: {base_model_name}) with API key (original index: {original_idx})."
-                        )
-                    break
-                except Exception as e:
-                    print(
-                        f"WARNING: Attempt {attempt + 1}/{total_keys} - Vertex Express Mode client init failed "
-                        f"for API key (original index: {original_idx}) for model {model}: {e}. Trying next key."
+    print(f"INFO: Attempting Vertex Express Mode for model request: {model} (base: {base_model_name})")
+    total_keys = express_key_manager.get_total_keys()
+    for attempt in range(total_keys):
+        key_tuple = express_key_manager.get_express_api_key()
+        if key_tuple:
+            original_idx, key_val = key_tuple
+            try:
+                if "gemini-2.5-pro" in base_model_name or "gemini-2.5-flash" in base_model_name:
+                    project_id = await discover_project_id(key_val)
+                    base_url = f"https://aiplatform.googleapis.com/v1/projects/{project_id}/locations/global"
+                    client_to_use = genai.Client(
+                        vertexai=True,
+                        api_key=key_val,
+                        http_options=types.HttpOptions(base_url=base_url),
                     )
-                    client_to_use = None
-            else:
-                print(f"WARNING: Attempt {attempt + 1}/{total_keys} - get_express_api_key() returned None unexpectedly.")
+                    client_to_use._api_client._http_options.api_version = None
+                    print(
+                        f"INFO: Attempt {attempt + 1}/{total_keys} - Using Vertex Express Mode with custom base URL "
+                        f"for model {model} (base: {base_model_name}) with API key (original index: {original_idx})."
+                    )
+                else:
+                    client_to_use = genai.Client(vertexai=True, api_key=key_val)
+                    print(
+                        f"INFO: Attempt {attempt + 1}/{total_keys} - Using Vertex Express Mode SDK "
+                        f"for model {model} (base: {base_model_name}) with API key (original index: {original_idx})."
+                    )
+                break
+            except Exception as e:
+                print(
+                    f"WARNING: Attempt {attempt + 1}/{total_keys} - Vertex Express Mode client init failed "
+                    f"for API key (original index: {original_idx}) for model {model}: {e}. Trying next key."
+                )
                 client_to_use = None
+        else:
+            print(f"WARNING: Attempt {attempt + 1}/{total_keys} - get_express_api_key() returned None unexpectedly.")
+            client_to_use = None
 
-        if client_to_use is None:
-            raise GeminiClientError(
-                f"All {total_keys} configured Express API keys failed to initialize or were unavailable for model '{model}'.",
-                status_code=500,
-                error_type="server_error",
-            )
-        return client_to_use
-
-    # SA credentials path
-    print(f"INFO: Model '{model}' is an SA credential request for Gemini. Attempting SA credentials.")
-    rotated_credentials, rotated_project_id = credential_manager.get_credentials()
-
-    if rotated_credentials and rotated_project_id:
-        try:
-            client_to_use = genai.Client(
-                vertexai=True,
-                credentials=rotated_credentials,
-                project=rotated_project_id,
-                location="global",
-            )
-            print(f"INFO: Using SA credential for Gemini model {model} (project: {rotated_project_id})")
-            return client_to_use
-        except Exception as e:
-            raise GeminiClientError(
-                f"SA credential client initialization failed for Gemini model '{model}': {e}.",
-                status_code=500,
-                error_type="server_error",
-            )
-
-    raise GeminiClientError(
-        f"Model '{model}' requires SA credentials for Gemini, but none are available or loaded.",
-        status_code=401,
-        error_type="authentication_error",
-    )
+    if client_to_use is None:
+        raise GeminiClientError(
+            f"All {total_keys} configured Express API keys failed to initialize or were unavailable for model '{model}'.",
+            status_code=500,
+            error_type="server_error",
+        )
+    return client_to_use
