@@ -59,7 +59,7 @@ FAKE_STREAMING_ENABLED = os.environ.get("FAKE_STREAMING", "false").lower() == "t
 FAKE_STREAMING_INTERVAL_SECONDS = _get_float_env("FAKE_STREAMING_INTERVAL", 1.0, minimum=0.0)
 
 # Upstream 429 retry settings. Retry count means retries after the first attempt.
-RETRY_COUNT = _get_int_env("RETRY_COUNT", 3, minimum=0)
+RETRY_COUNT = _get_int_env("RETRY_COUNT", 30, minimum=0)
 # Fixed interval between upstream 429 retries, in milliseconds.
 RETRY_INTERVAL_MS = _get_int_env("RETRY_INTERVAL_MS", 1000, minimum=0)
 
