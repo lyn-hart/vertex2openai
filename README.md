@@ -38,8 +38,8 @@ The server listens on port **8050**. It refuses to start when `PROXY_API_KEY` or
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `FAKE_STREAMING` | `false` | Emit non-streamed responses as SSE chunks |
 | `FAKE_STREAMING_INTERVAL` | `1.0` | Keep-alive interval (seconds) for fake streaming |
-| `RETRY_COUNT` | `30` | Upstream 429 retries after the first attempt |
-| `RETRY_INTERVAL_MS` | `1000` | Fixed interval between 429 retries |
+| `RETRY_COUNT` | `100` | Upstream 429 retries after the first attempt |
+| `RETRY_INTERVAL_MS` | `100` | Fixed interval between 429 retries |
 | `MODELS_CONFIG_URL` | upstream JSON | Remote model list; must contain `vertex_express_models` |
 | `PROXY_URL` | — | Outbound proxy for Google API calls (http/https/socks5) |
 | `SSL_CERT_FILE` | — | Custom CA bundle for upstream TLS verification |
