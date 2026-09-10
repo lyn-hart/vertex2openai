@@ -75,8 +75,17 @@ The `[PAY]`, `[EXPRESS]` prefixes and `-encrypt`, `-encrypt-full`, `-auto`, `-op
 
 **Thinking control (request-body params)** — the `-nothinking` and `-max` model suffixes have been removed; control thinking per-request instead:
 
-- OpenAI path (`/v1/chat/completions`): `reasoning_effort` (label: `none|minimal|low|medium|high|xhigh|max`) or `thinking_budget` (token number, 0 disables). A numeric budget overrides the label.
+- OpenAI path (`/v1/chat/completions`): `reasoning_effort` (label: `none|minimal|low|medium|high|xhigh|max`) or `thinking_budget` (token number). A numeric budget overrides the label.
 - Anthropic path (`/v1/messages`): `thinking: {type: "enabled", budget_tokens: N}` or `thinking: {type: "enabled", effort: "..."}` (Claude Code style); top-level effort fields are also accepted.
+
+Labels are routed by model generation:
+
+| Model | Param sent upstream | Label mapping |
+|---|---|---|
+| Gemini 2.5.x | `thinking_budget` (tokens) | `none`=0, `minimal`=512, `low`=2048, `medium`=8192, `high`=16384, `xhigh`/`max`=24576 (clamped to 24576) |
+| Gemini 3.x | `thinking_level` enum | `none`/`minimal`→`MINIMAL`, `low`→`LOW`, `medium`→`MEDIUM`, `high`/`xhigh`/`max`→`HIGH` |
+
+Two caveats for Gemini 3.x: levels use the enum, so request a numeric `thinking_budget` / `budget_tokens` to control the exact budget; and levels a model does not accept are rounded **up** to the nearest supported one (e.g. `gemini-3.8-flash` has no `MINIMAL`, so `none`/`minimal` become `LOW` — there is no way to fully disable thinking on most 3.x models).
 
 **Known upstream limitation:** the Vertex endpoint does not serve Google Search grounding together with function calling — when a request carries both, the search tool is dropped and the model only sees the functions (a WARNING is logged server-side). Ask for search only in requests without function tools.
 
