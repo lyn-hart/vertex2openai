@@ -77,8 +77,6 @@ async def create_message(
             client = await resolve_gemini_client(
                 model=request.model,
                 base_model_name=base_model_name,
-                is_express_model_request=features.is_express_model_request,
-                is_pay_model_request=features.is_pay_model_request,
                 express_key_manager=express_key_manager,
             )
         except GeminiClientError as e:

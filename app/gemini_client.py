@@ -15,9 +15,6 @@ from google.genai import types
 from project_id_discovery import discover_project_id
 
 
-EXPERIMENTAL_MARKER = "-exp-"
-PAY_PREFIX = "[PAY]"
-EXPRESS_PREFIX = "[EXPRESS] "  # trailing space for easier stripping
 
 
 @dataclass
@@ -26,12 +23,7 @@ class ModelFeatures:
 
     original_model: str
     base_model_name: str
-    is_express_model_request: bool = False
-    is_pay_model_request: bool = False
-    is_auto_model: bool = False
     is_grounded_search: bool = False
-    is_encrypted_model: bool = False
-    is_encrypted_full_model: bool = False
     is_nothinking_model: bool = False
     is_max_thinking_model: bool = False
     is_2k_image_model: bool = False
@@ -39,36 +31,17 @@ class ModelFeatures:
 
 
 def parse_model_features(model: str) -> ModelFeatures:
-    """Parse model name prefixes/suffixes used by this adapter."""
-    is_auto_model = model.endswith("-auto")
+    """Parse model name suffixes used by this adapter."""
     is_grounded_search = model.endswith("-search")
-    is_encrypted_model = model.endswith("-encrypt")
-    is_encrypted_full_model = model.endswith("-encrypt-full")
     is_nothinking_model = model.endswith("-nothinking")
     is_max_thinking_model = model.endswith("-max")
     is_2k_image_model = model.endswith("-2k")
     is_4k_image_model = model.endswith("-4k")
 
     base_model_name = model
-    is_express_model_request = False
-    is_pay_model_request = False
-    # Legacy "[EXPRESS] " prefix still accepted for backward compatibility.
-    if base_model_name.startswith(EXPRESS_PREFIX):
-        is_express_model_request = True
-        base_model_name = base_model_name[len(EXPRESS_PREFIX) :]
 
-    if base_model_name.startswith(PAY_PREFIX):
-        is_pay_model_request = True
-        base_model_name = base_model_name[len(PAY_PREFIX) :]
-
-    if is_auto_model:
-        base_model_name = base_model_name[: -len("-auto")]
-    elif is_grounded_search:
+    if is_grounded_search:
         base_model_name = base_model_name[: -len("-search")]
-    elif is_encrypted_full_model:
-        base_model_name = base_model_name[: -len("-encrypt-full")]
-    elif is_encrypted_model:
-        base_model_name = base_model_name[: -len("-encrypt")]
     elif is_nothinking_model:
         base_model_name = base_model_name[: -len("-nothinking")]
     elif is_max_thinking_model:
@@ -81,12 +54,7 @@ def parse_model_features(model: str) -> ModelFeatures:
     return ModelFeatures(
         original_model=model,
         base_model_name=base_model_name,
-        is_express_model_request=is_express_model_request,
-        is_pay_model_request=is_pay_model_request,
-        is_auto_model=is_auto_model,
         is_grounded_search=is_grounded_search,
-        is_encrypted_model=is_encrypted_model,
-        is_encrypted_full_model=is_encrypted_full_model,
         is_nothinking_model=is_nothinking_model,
         is_max_thinking_model=is_max_thinking_model,
         is_2k_image_model=is_2k_image_model,
@@ -146,15 +114,10 @@ async def resolve_gemini_client(
     *,
     model: str,
     base_model_name: str,
-    is_express_model_request: bool,
     express_key_manager: Any,
-    is_pay_model_request: bool = False,
 ) -> Optional[Any]:
     """
     Build a google.genai Client for Gemini using a Vertex Express API key.
-
-    [PAY] and legacy [EXPRESS] prefixes are still parsed but both resolve
-    to Express (the only available backend).
 
     Raises GeminiClientError on auth/config failures.
     """

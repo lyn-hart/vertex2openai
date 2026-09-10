@@ -416,9 +416,8 @@ async def gemini_fake_stream_generator(
     gemini_client_instance: Any, 
     model_for_api_call: str, 
     prompt_for_api_call: List[types.Content],
-    gen_config_dict_for_api_call: Dict[str, Any], 
+    gen_config_dict_for_api_call: Dict[str, Any],
     request_obj: OpenAIRequest,
-    is_auto_attempt: bool
 ):
     model_name_for_log = getattr(gemini_client_instance, 'model_name', 'unknown_gemini_model_object')
     print(f"FAKE STREAMING (Gemini): Prep for '{request_obj.model}' (API model string: '{model_for_api_call}', client obj: '{model_name_for_log}')")
@@ -475,9 +474,8 @@ async def execute_gemini_call(
     current_client: Any, 
     model_to_call: str,  
     prompt_func: Callable[[List[OpenAIMessage]], List[types.Content]], 
-    gen_config_dict: Dict[str, Any], 
-    request_obj: OpenAIRequest, 
-    is_auto_attempt: bool = False
+    gen_config_dict: Dict[str, Any],
+    request_obj: OpenAIRequest,
 ):
     actual_prompt_for_call = prompt_func(request_obj.messages)
     client_model_name_for_log = getattr(current_client, 'model_name', 'unknown_direct_client_object')
@@ -488,8 +486,8 @@ async def execute_gemini_call(
             return StreamingResponse(
                 gemini_fake_stream_generator(
                     current_client, model_to_call, actual_prompt_for_call,
-                    gen_config_dict, 
-                    request_obj, is_auto_attempt
+                    gen_config_dict,
+                    request_obj
                 ), media_type="text/event-stream"
             )
         else: # True Streaming
@@ -541,7 +539,7 @@ async def execute_gemini_call(
                 gen_config_dict
             )
         except Exception as e_non_stream_call:
-            if _is_upstream_429_error(e_non_stream_call) and not is_auto_attempt:
+            if _is_upstream_429_error(e_non_stream_call):
                 s_err = str(e_non_stream_call); s_err = s_err[:1024]+"..." if len(s_err)>1024 else s_err
                 return JSONResponse(
                     status_code=429,
