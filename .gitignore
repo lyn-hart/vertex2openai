@@ -145,3 +145,5 @@ pids/
 # Project-specific planning files
 refactoring_plan.md
 multiple_credentials_implementation.md
+# Claude Code local settings
+.claude/
