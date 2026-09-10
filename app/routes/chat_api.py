@@ -54,12 +54,19 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
         current_prompt_func = create_gemini_prompt
 
         if is_grounded_search:
-            search_tool = types.Tool(google_search=types.GoogleSearch())
-            # Add or update the 'tools' key in the gen_config_dict
-            if "tools" in gen_config_dict and isinstance(gen_config_dict["tools"], list):
-                gen_config_dict["tools"].append(search_tool)
-            else:
-                gen_config_dict["tools"] = [search_tool]
+            # Vertex requires google_search to live on the same Tool object as
+            # any function declarations — "multiple tools" entries are rejected
+            # unless they are all search tools.
+            search_added = False
+            for existing_tool in gen_config_dict.get("tools", []):
+                if isinstance(existing_tool, types.Tool) and getattr(existing_tool, "function_declarations", None):
+                    existing_tool.google_search = types.GoogleSearch()
+                    search_added = True
+                    break
+            if not search_added:
+                gen_config_dict.setdefault("tools", []).append(
+                    types.Tool(google_search=types.GoogleSearch())
+                )
 
         apply_thinking_config(
             gen_config_dict,

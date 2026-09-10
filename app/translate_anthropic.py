@@ -366,6 +366,10 @@ def anthropic_tools_to_gemini(tools: Optional[List[Any]]) -> List[types.Function
     for t in tools:
         if not isinstance(t, dict):
             continue
+        # Built-in web_search_* tools map to Google Search grounding instead
+        # (see create_anthropic_generation_config), never to a function.
+        if str(t.get("type", "")).startswith("web_search"):
+            continue
         # OpenAI-shaped tool passthrough
         if isinstance(t.get("function"), dict):
             func_def = t["function"]
@@ -633,9 +637,18 @@ def create_anthropic_generation_config(
 
     function_declarations = anthropic_tools_to_gemini(getattr(request, "tools", None))
     tools_list: List[Any] = []
+    enable_search = is_grounded_search or _request_has_web_search_tool(getattr(request, "tools", None))
     if function_declarations:
-        tools_list.append(types.Tool(function_declarations=function_declarations))
-    if is_grounded_search or _request_has_web_search_tool(getattr(request, "tools", None)):
+        # Vertex requires google_search on the same Tool object as function
+        # declarations — separate tool entries are rejected.
+        if enable_search:
+            tools_list.append(types.Tool(
+                function_declarations=function_declarations,
+                google_search=types.GoogleSearch(),
+            ))
+        else:
+            tools_list.append(types.Tool(function_declarations=function_declarations))
+    elif enable_search:
         tools_list.append(types.Tool(google_search=types.GoogleSearch()))
     if tools_list:
         config["tools"] = tools_list
