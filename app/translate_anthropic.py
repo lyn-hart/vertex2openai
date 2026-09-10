@@ -451,11 +451,13 @@ _EFFORT_TO_THINKING_BUDGET: Dict[str, int] = {
     "low": 2048,
     "medium": 8192,
     "high": 16384,
+    # 24576 is the highest budget accepted across current Express models
+    # (32768 is rejected by gemini-2.5-flash with a 400 out-of-range).
     "xhigh": 24576,
-    "max": 32768,
+    "max": 24576,
     # aliases
-    "ultrathink": 32768,
-    "ultra": 32768,
+    "ultrathink": 24576,
+    "ultra": 24576,
 }
 
 
@@ -491,7 +493,7 @@ def _thinking_budget_from_anthropic(thinking: Any) -> Optional[int]:
         return _EFFORT_TO_THINKING_BUDGET["medium"] if thinking else 0
     if isinstance(thinking, (int, float)) and not isinstance(thinking, bool):
         try:
-            return max(0, int(thinking))
+            return max(0, min(int(thinking), 24576))
         except (TypeError, ValueError):
             return None
     if isinstance(thinking, str):

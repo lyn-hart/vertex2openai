@@ -656,6 +656,9 @@ def create_openai_error_response(status_code: int, message: str, error_type: str
 
 
 # Effort labels shared with the Anthropic path (translate_anthropic.py).
+# Values are capped at 24576: gemini-2.5-flash rejects budgets above that
+# ("thinking_budget is out of range; supported values are integers from 1 to
+# 24576"). Per-model ceilings vary, so max/xhigh map to 24576, not 32768.
 _EFFORT_TO_THINKING_BUDGET: Dict[str, int] = {
     "none": 0,
     "minimal": 512,
@@ -663,17 +666,21 @@ _EFFORT_TO_THINKING_BUDGET: Dict[str, int] = {
     "medium": 8192,
     "high": 16384,
     "xhigh": 24576,
-    "max": 32768,
-    "ultrathink": 32768,
-    "ultra": 32768,
+    "max": 24576,
+    "ultrathink": 24576,
+    "ultra": 24576,
 }
+
+# Upper bound accepted by all current Express models.
+_THINKING_BUDGET_CEILING = 24576
 
 
 def _apply_thinking_params(request: OpenAIRequest, config: Dict[str, Any]) -> None:
     """Map request-body thinking params (reasoning_effort / thinking_budget)
-    into the Gemini thinking_config. Explicit numeric budgets win over labels."""
+    into the Gemini thinking_config. Explicit numeric budgets win over labels
+    and are clamped to the model-supported ceiling."""
     if request.thinking_budget is not None:
-        budget = max(0, int(request.thinking_budget))
+        budget = max(0, min(int(request.thinking_budget), _THINKING_BUDGET_CEILING))
     elif request.reasoning_effort is not None:
         budget = _EFFORT_TO_THINKING_BUDGET.get(str(request.reasoning_effort).strip().lower())
         if budget is None:
