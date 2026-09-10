@@ -638,6 +638,11 @@ def create_anthropic_generation_config(
     function_declarations = anthropic_tools_to_gemini(getattr(request, "tools", None))
     tools_list: List[Any] = []
     enable_search = is_grounded_search or _request_has_web_search_tool(getattr(request, "tools", None))
+    if enable_search and function_declarations:
+        logger.warning(
+            "Search requested together with function tools; the upstream "
+            "endpoint ignores search when function tools are present."
+        )
     if function_declarations:
         # Vertex requires google_search on the same Tool object as function
         # declarations — separate tool entries are rejected.

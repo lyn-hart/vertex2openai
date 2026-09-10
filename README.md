@@ -75,6 +75,8 @@ The `[PAY]`, `[EXPRESS]` prefixes and `-encrypt`, `-encrypt-full`, `-auto`, `-op
 
 `web_search_options: {...}` (OpenAI's parameter) also enables it. On `/v1/messages`, include an Anthropic `web_search_*` tool in the `tools` array. When search grounding runs, the response text is appended with a markdown **Sources:** list of the retrieved pages.
 
+**Known upstream limitation:** the Vertex endpoint does not serve Google Search grounding together with function calling — when a request carries both, the search tool is dropped and the model only sees the functions (a WARNING is logged server-side). Ask for search only in requests without function tools.
+
 ## Usage
 
 ### OpenAI clients

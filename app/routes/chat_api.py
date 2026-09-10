@@ -54,9 +54,23 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
         current_prompt_func = create_gemini_prompt
 
         if is_grounded_search:
-            # Vertex requires google_search to live on the same Tool object as
-            # any function declarations — "multiple tools" entries are rejected
-            # unless they are all search tools.
+            # Vertex does not support Google Search grounding together with
+            # function calling: the upstream keeps the function tools and
+            # silently drops the search tool (or rejects with 400). We still
+            # send both, but warn so the behavior is diagnosable.
+            has_function_tools = any(
+                isinstance(t, types.Tool) and getattr(t, "function_declarations", None)
+                for t in gen_config_dict.get("tools", [])
+            )
+            if has_function_tools:
+                logger.warning(
+                    "Search requested together with function tools for model '%s'; "
+                    "the upstream endpoint ignores search when function tools are present.",
+                    request.model,
+                )
+            # google_search must ride on the same Tool object as any function
+            # declarations — separate tool entries are rejected by the SDK's
+            # t_tools transformer.
             search_added = False
             for existing_tool in gen_config_dict.get("tools", []):
                 if isinstance(existing_tool, types.Tool) and getattr(existing_tool, "function_declarations", None):
