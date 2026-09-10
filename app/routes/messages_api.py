@@ -24,12 +24,11 @@ from anthropic_messages import (
 from api_helpers import (
     generate_gemini_content,
     stream_gemini_content,
-    _is_upstream_429_error,
 )
-from gemini_client import (
+from client import (
     GeminiClientError,
+    _is_upstream_429_error,
     parse_model_features,
-    resolve_gemini_client,
 )
 
 import logging
@@ -76,24 +75,6 @@ async def create_message(
         base_model_name = features.base_model_name
         express_key_manager = fastapi_request.app.state.express_key_manager
 
-        try:
-            client = await resolve_gemini_client(
-                model=request.model,
-                base_model_name=base_model_name,
-                express_key_manager=express_key_manager,
-            )
-        except GeminiClientError as e:
-            logger.error(f"{e.message}")
-            return _anthropic_error_response(
-                e.message, status=e.status_code, err_type=e.error_type
-            )
-
-        if client is None:
-            return _anthropic_error_response(
-                "Critical internal server error: Gemini client not initialized.",
-                status=500,
-            )
-
         contents = create_anthropic_gemini_contents(request.messages)
         gen_config = create_anthropic_generation_config(
             request,
@@ -118,7 +99,7 @@ async def create_message(
                 )
                 try:
                     async for chunk in stream_gemini_content(
-                        client, base_model_name, contents, gen_config
+                        express_key_manager, base_model_name, contents, gen_config
                     ):
                         for ev in assembler.process_chunk(chunk):
                             yield ev
@@ -143,7 +124,7 @@ async def create_message(
         # Non-streaming
         try:
             response_obj = await generate_gemini_content(
-                client, base_model_name, contents, gen_config
+                express_key_manager, base_model_name, contents, gen_config
             )
         except Exception as e:
             logger.error(f"Anthropic non-stream generate failed for '{base_model_name}': {e}")

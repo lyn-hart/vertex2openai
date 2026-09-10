@@ -13,11 +13,9 @@ from api_helpers import (
     create_openai_error_response,
     execute_gemini_call,
 )
-from gemini_client import (
+from client import (
     parse_model_features,
-    resolve_gemini_client,
     apply_thinking_config,
-    GeminiClientError,
 )
 
 import logging
@@ -47,25 +45,6 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
         if "gemini-2.5-flash-lite" in base_model_name:
             gen_config_dict["thinking_config"]["include_thoughts"] = False
 
-        client_to_use = None
-        try:
-            client_to_use = await resolve_gemini_client(
-                model=request.model,
-                base_model_name=base_model_name,
-                express_key_manager=express_key_manager_instance,
-            )
-        except GeminiClientError as e:
-            logger.error(f"{e.message}")
-            return JSONResponse(
-                status_code=e.status_code,
-                content=create_openai_error_response(e.status_code, e.message, e.error_type),
-            )
-
-        # For Gemini models, client_to_use must be set, or an error returned above.
-        if client_to_use is None:
-            logger.error(f"Client for Gemini model '{request.model}' was not initialized, and no specific error was returned. This indicates a logic flaw.")
-            return JSONResponse(status_code=500, content=create_openai_error_response(500, "Critical internal server error: Gemini client not initialized.", "server_error"))
-
         current_prompt_func = create_gemini_prompt
 
         if is_grounded_search:
@@ -83,7 +62,7 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
             is_max_thinking_model=is_max_thinking_model,
         )
 
-        return await execute_gemini_call(client_to_use, base_model_name, current_prompt_func, gen_config_dict, request)
+        return await execute_gemini_call(express_key_manager_instance, base_model_name, current_prompt_func, gen_config_dict, request)
 
     except Exception as e:
         error_msg = f"Unexpected error in chat_completions endpoint: {str(e)}"

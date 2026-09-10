@@ -2,7 +2,7 @@ import time
 from fastapi import APIRouter, Depends, Request
 from typing import List, Dict, Any, Set
 from auth import get_api_key
-from model_loader import get_vertex_express_models, refresh_models_config_cache
+from catalog import get_express_models, refresh_models_config_cache
 
 router = APIRouter()
 
@@ -14,7 +14,7 @@ async def list_models(fastapi_request: Request, api_key: str = Depends(get_api_k
 
     has_express_key = express_key_manager_instance.get_total_keys() > 0
 
-    raw_express_models = await get_vertex_express_models()
+    raw_express_models = await get_express_models()
 
     final_model_list: List[Dict[str, Any]] = []
     processed_ids: Set[str] = set()
