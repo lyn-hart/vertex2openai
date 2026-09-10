@@ -17,6 +17,9 @@ from message_processing import (
 import config as app_config
 from config import VERTEX_REASONING_TAG
 
+import logging
+logger = logging.getLogger(__name__)
+
 class StreamingReasoningProcessor:
     def __init__(self, tag_name: str = VERTEX_REASONING_TAG):
         self.tag_name = tag_name
@@ -138,12 +141,9 @@ async def _sleep_before_429_retry(exc: Exception, retry_number: int, model_name:
     now = time.time()
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
     timestamp = f"{timestamp}.{int((now % 1) * 1000):03d}"
-    print(
-        f"WARNING: [{timestamp}] Upstream 429 for Gemini model '{model_name}'. "
+    logger.warning(f"[{timestamp}] Upstream 429 for Gemini model '{model_name}'. "
         f"Retrying {retry_number}/{app_config.RETRY_COUNT} "
-        f"after fixed interval {delay_ms}ms.",
-        flush=True
-    )
+        f"after fixed interval {delay_ms}ms.")
     if delay_seconds > 0:
         await asyncio.sleep(delay_seconds)
 
@@ -152,11 +152,8 @@ def _log_429_retry_recovered(model_name: str, retry_number: int) -> None:
     if retry_number <= 0:
         return
 
-    print(
-        f"INFO: Upstream 429 retry recovered for Gemini model '{model_name}' "
-        f"after {retry_number} retry attempt(s).",
-        flush=True
-    )
+    logger.info(f"Upstream 429 retry recovered for Gemini model '{model_name}' "
+        f"after {retry_number} retry attempt(s).")
 
 
 async def _generate_content_with_429_retries(
@@ -249,12 +246,12 @@ def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
         # Add image generation config for 2k resolution
         config["responseModalities"] = ["TEXT", "IMAGE"]
         config["imageConfig"] = {"imageSize": "2k"}
-        print(f"Detected -2k suffix, adding image generation config with 2k resolution")
+        logger.info(f"Detected -2k suffix, adding image generation config with 2k resolution")
     elif model_name.endswith('-4k'):
         # Add image generation config for 4k resolution
         config["responseModalities"] = ["TEXT", "IMAGE"]
         config["imageConfig"] = {"imageSize": "4k"}
-        print(f"Detected -4k suffix, adding image generation config with 4k resolution")
+        logger.info(f"Detected -4k suffix, adding image generation config with 4k resolution")
     
     if request.temperature is not None: config["temperature"] = request.temperature
     if request.max_tokens is not None: config["max_output_tokens"] = request.max_tokens
@@ -420,7 +417,7 @@ async def gemini_fake_stream_generator(
     request_obj: OpenAIRequest,
 ):
     model_name_for_log = getattr(gemini_client_instance, 'model_name', 'unknown_gemini_model_object')
-    print(f"FAKE STREAMING (Gemini): Prep for '{request_obj.model}' (API model string: '{model_for_api_call}', client obj: '{model_name_for_log}')")
+    logger.info(f"FAKE STREAMING (Gemini): Prep for '{request_obj.model}' (API model string: '{model_for_api_call}', client obj: '{model_name_for_log}')")
     
     api_call_task = asyncio.create_task(
         _generate_content_with_429_retries(
@@ -458,7 +455,7 @@ async def gemini_fake_stream_generator(
 
     except Exception as e_outer_gemini:
         err_msg_detail = f"Error in gemini_fake_stream_generator (model: '{request_obj.model}'): {type(e_outer_gemini).__name__} - {str(e_outer_gemini)}"
-        print(f"ERROR: {err_msg_detail}")
+        logger.error(f"{err_msg_detail}")
         sse_err_msg_display = str(e_outer_gemini)
         if len(sse_err_msg_display) > 512: sse_err_msg_display = sse_err_msg_display[:512] + "..."
         status_code = 429 if _is_upstream_429_error(e_outer_gemini) else 500
@@ -479,7 +476,7 @@ async def execute_gemini_call(
 ):
     actual_prompt_for_call = prompt_func(request_obj.messages)
     client_model_name_for_log = getattr(current_client, 'model_name', 'unknown_direct_client_object')
-    print(f"INFO: execute_gemini_call for requested API model '{model_to_call}', using client object with internal name '{client_model_name_for_log}'. Original request model: '{request_obj.model}'")
+    logger.info(f"execute_gemini_call for requested API model '{model_to_call}', using client object with internal name '{client_model_name_for_log}'. Original request model: '{request_obj.model}'")
     
     if request_obj.stream:
         if app_config.FAKE_STREAMING_ENABLED:
@@ -520,7 +517,7 @@ async def execute_gemini_call(
                             continue
 
                         err_msg_detail_stream = f"Streaming Error (Gemini API, model string: '{model_to_call}'): {type(e_stream_call).__name__} - {str(e_stream_call)}"
-                        print(f"ERROR: {err_msg_detail_stream}")
+                        logger.error(f"{err_msg_detail_stream}")
                         s_err = str(e_stream_call); s_err = s_err[:1024]+"..." if len(s_err)>1024 else s_err
                         status_code = 429 if _is_upstream_429_error(e_stream_call) else 500
                         error_type = "rate_limit_error" if status_code == 429 else "server_error"

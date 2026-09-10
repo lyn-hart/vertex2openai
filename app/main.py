@@ -1,16 +1,23 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from logging_setup import configure_logging
+from config import config_summary, validate_config
+
 # Local module imports
 from auth import get_api_key # Potentially for root endpoint
 from express_key_manager import ExpressKeyManager
 from model_loader import refresh_models_config_cache
-import config as app_config
 
 # Routers
 from routes import models_api
 from routes import chat_api
 from routes import messages_api
+
+import logging
+logger = logging.getLogger("main")
+
+configure_logging()
 
 app = FastAPI(title="OpenAI to Gemini Adapter")
 
@@ -32,29 +39,18 @@ app.include_router(messages_api.router)
 
 @app.on_event("startup")
 async def startup_event():
-    # Check Express API keys availability
-    express_keys_count = express_key_manager.get_total_keys()
+    # Fail fast when required configuration is missing.
+    validate_config()
 
-    print(f"INFO: Express API keys loaded: {express_keys_count}")
-    print(
-        "INFO: Upstream 429 retry config: "
-        f"count={app_config.RETRY_COUNT}, "
-        f"fixed_interval_ms={app_config.RETRY_INTERVAL_MS}",
-        flush=True
-    )
-
-    if express_keys_count > 0:
-        print("INFO: Vertex Express authentication initialization completed successfully.")
-    else:
-        print("ERROR: No Express API keys configured. API calls will fail.")
+    logger.info("Vertex Express configuration: %s", config_summary())
 
     # Pre-warm the model configuration cache
-    print("INFO: Attempting to pre-warm model configuration cache during startup...")
+    logger.info("Attempting to pre-warm model configuration cache during startup...")
     models_loaded_successfully = await refresh_models_config_cache()
     if models_loaded_successfully:
-        print("INFO: Model configuration cache pre-warmed successfully.")
+        logger.info("Model configuration cache pre-warmed successfully.")
     else:
-        print("WARNING: Failed to pre-warm model configuration cache during startup. It will be loaded lazily on first request.")
+        logger.warning("Failed to pre-warm model configuration cache during startup. It will be loaded lazily on first request.")
 
 @app.get("/")
 async def root():

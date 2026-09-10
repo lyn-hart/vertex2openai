@@ -7,8 +7,12 @@ services:
     ports:
       - "8050:8050"
     environment:
-      # API key for authentication (default: 123456)
-      - API_KEY=123456
+      # Required: API key clients must present (no default — startup fails if missing)
+      - PROXY_API_KEY=change-me
+      # Required: comma-separated Vertex Express API keys
+      - EXPRESS_API_KEYS=
+      # Express key rotation strategy: random (default) or roundrobin
+      - KEY_ROTATION=random
       # Enable/disable fake streaming (default: false)
       - FAKE_STREAMING=false
       # Interval for fake streaming keep-alive messages (default: 1.0)

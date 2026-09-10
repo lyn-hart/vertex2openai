@@ -20,6 +20,9 @@ from gemini_client import (
     GeminiClientError,
 )
 
+import logging
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 @router.post("/v1/chat/completions")
@@ -52,7 +55,7 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
                 express_key_manager=express_key_manager_instance,
             )
         except GeminiClientError as e:
-            print(f"ERROR: {e.message}")
+            logger.error(f"{e.message}")
             return JSONResponse(
                 status_code=e.status_code,
                 content=create_openai_error_response(e.status_code, e.message, e.error_type),
@@ -60,7 +63,7 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
 
         # For Gemini models, client_to_use must be set, or an error returned above.
         if client_to_use is None:
-            print(f"CRITICAL ERROR: Client for Gemini model '{request.model}' was not initialized, and no specific error was returned. This indicates a logic flaw.")
+            logger.error(f"Client for Gemini model '{request.model}' was not initialized, and no specific error was returned. This indicates a logic flaw.")
             return JSONResponse(status_code=500, content=create_openai_error_response(500, "Critical internal server error: Gemini client not initialized.", "server_error"))
 
         current_prompt_func = create_gemini_prompt
@@ -84,5 +87,5 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
 
     except Exception as e:
         error_msg = f"Unexpected error in chat_completions endpoint: {str(e)}"
-        print(error_msg)
+        logger.info(error_msg)
         return JSONResponse(status_code=500, content=create_openai_error_response(500, error_msg, "server_error"))

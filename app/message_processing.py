@@ -8,6 +8,9 @@ from typing import List, Dict, Any, Tuple
 from google.genai import types
 from models import OpenAIMessage, ContentPartText, ContentPartImage
 
+import logging
+logger = logging.getLogger(__name__)
+
 SUPPORTED_ROLES = ["user", "model", "function"] # Added "function" for Gemini
 
 THOUGHT_SIGNATURE_TOOL_CALL_ID_MARKER = "__tsig__"
@@ -65,7 +68,7 @@ def _decode_tool_call_id_thought_signature(tool_call_id: str) -> Tuple[str, byte
     try:
         thought_signature = base64.urlsafe_b64decode(encoded_signature + padding)
     except Exception as e:
-        print(f"Warning: Failed to decode thought_signature from tool_call_id '{tool_call_id}': {e}")
+        logger.info(f"Warning: Failed to decode thought_signature from tool_call_id '{tool_call_id}': {e}")
         return tool_call_id, b""
 
     return raw_tool_call_id, thought_signature
@@ -90,19 +93,19 @@ def _build_function_call_part(function_name: str, parsed_arguments: Dict[str, An
             function_call.id = tool_call_id
         part = types.Part(function_call=function_call)
     except Exception as e:
-        print(f"Warning: Failed to build Gemini function_call Part directly for {function_name}: {e}")
+        logger.info(f"Warning: Failed to build Gemini function_call Part directly for {function_name}: {e}")
         part = types.Part.from_function_call(name=function_name, args=parsed_arguments)
         if tool_call_id and getattr(part, "function_call", None) is not None:
             try:
                 part.function_call.id = tool_call_id
             except Exception as id_error:
-                print(f"Warning: Failed to set function_call.id for {function_name}: {id_error}")
+                logger.info(f"Warning: Failed to set function_call.id for {function_name}: {id_error}")
 
     if thought_signature:
         try:
             part.thought_signature = thought_signature
         except Exception as signature_error:
-            print(f"Warning: Failed to set thought_signature for {function_name}: {signature_error}")
+            logger.info(f"Warning: Failed to set thought_signature for {function_name}: {signature_error}")
 
     return part
 
@@ -114,13 +117,13 @@ def _build_function_response_part(function_name: str, tool_output_data: Dict[str
             function_response.id = tool_call_id
         return types.Part(function_response=function_response)
     except Exception as e:
-        print(f"Warning: Failed to build Gemini function_response Part directly for {function_name}: {e}")
+        logger.info(f"Warning: Failed to build Gemini function_response Part directly for {function_name}: {e}")
         part = types.Part.from_function_response(name=function_name, response=tool_output_data)
         if tool_call_id and getattr(part, "function_response", None) is not None:
             try:
                 part.function_response.id = tool_call_id
             except Exception as id_error:
-                print(f"Warning: Failed to set function_response.id for {function_name}: {id_error}")
+                logger.info(f"Warning: Failed to set function_response.id for {function_name}: {id_error}")
         return part
 
 def _extract_markdown_images_to_parts(text: str) -> Tuple[List[types.Part], str]:
@@ -158,9 +161,9 @@ def _extract_markdown_images_to_parts(text: str) -> Tuple[List[types.Part], str]
                 start, end = match.span()
                 remaining_text = remaining_text[:start] + remaining_text[end:]
                 
-                print(f"Extracted markdown image with mime type: {mime_type}")
+                logger.info(f"Extracted markdown image with mime type: {mime_type}")
             except Exception as e:
-                print(f"Error extracting markdown image: {e}")
+                logger.info(f"Error extracting markdown image: {e}")
         
         # Reverse parts list since we processed matches in reverse
         parts.reverse()
@@ -171,7 +174,7 @@ def _extract_markdown_images_to_parts(text: str) -> Tuple[List[types.Part], str]
     return parts, remaining_text
 
 def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
-    print("Converting OpenAI messages to Gemini format...")
+    logger.info("Converting OpenAI messages to Gemini format...")
     gemini_messages = []
     pending_function_response_parts = []
 
@@ -209,7 +212,7 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
                 pending_function_response_parts.extend(parts)
                 continue
             else:
-                print(f"Skipping tool message {idx} due to missing name, tool_call_id, or content.")
+                logger.info(f"Skipping tool message {idx} due to missing name, tool_call_id, or content.")
                 continue
         elif role == "assistant" and message.tool_calls:
             flush_pending_function_response_parts()
@@ -222,7 +225,7 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
                 try:
                     parsed_arguments = json.loads(arguments_str)
                 except json.JSONDecodeError:
-                    print(f"Warning: Could not parse tool call arguments for {function_name}: {arguments_str}")
+                    logger.info(f"Warning: Could not parse tool call arguments for {function_name}: {arguments_str}")
                     parsed_arguments = {} 
                 
                 if function_name:
@@ -272,15 +275,15 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
                                     image_bytes = base64.b64decode(b64_data)
                                     parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
             if not parts: 
-                print(f"Skipping assistant message {idx} with empty/invalid tool_calls and no content.")
+                logger.info(f"Skipping assistant message {idx} with empty/invalid tool_calls and no content.")
                 continue
         else: 
             flush_pending_function_response_parts()
             if message.content is None:
-                print(f"Skipping message {idx} (Role: {role}) due to None content.")
+                logger.info(f"Skipping message {idx} (Role: {role}) due to None content.")
                 continue
             if not message.content and isinstance(message.content, (str, list)) and not len(message.content):
-                 print(f"Skipping message {idx} (Role: {role}) due to empty content string or list.")
+                 logger.info(f"Skipping message {idx} (Role: {role}) due to empty content string or list.")
                  continue
 
             current_gemini_role = role
@@ -288,7 +291,7 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
             elif current_gemini_role == "assistant": current_gemini_role = "model"
             
             if current_gemini_role not in SUPPORTED_ROLES:
-                print(f"Warning: Role '{current_gemini_role}' (from original '{role}') is not in SUPPORTED_ROLES {SUPPORTED_ROLES}. Mapping to 'user'.")
+                logger.info(f"Warning: Role '{current_gemini_role}' (from original '{role}') is not in SUPPORTED_ROLES {SUPPORTED_ROLES}. Mapping to 'user'.")
                 current_gemini_role = "user"
 
             if isinstance(message.content, str):
@@ -334,24 +337,24 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
                 parts.append(types.Part(text=str(message.content)))
             
             if not parts:
-                 print(f"Skipping message {idx} (Role: {role}) as it resulted in no processable parts.")
+                 logger.info(f"Skipping message {idx} (Role: {role}) as it resulted in no processable parts.")
                  continue
 
         if not current_gemini_role:
-            print(f"Error: current_gemini_role not set for message {idx}. Original role: {message.role}. Defaulting to 'user'.")
+            logger.info(f"Error: current_gemini_role not set for message {idx}. Original role: {message.role}. Defaulting to 'user'.")
             current_gemini_role = "user"
 
         if not parts:
-            print(f"Skipping message {idx} (Original role: {message.role}, Mapped Gemini role: {current_gemini_role}) as it resulted in no parts after processing.")
+            logger.info(f"Skipping message {idx} (Original role: {message.role}, Mapped Gemini role: {current_gemini_role}) as it resulted in no parts after processing.")
             continue
             
         gemini_messages.append(types.Content(role=current_gemini_role, parts=parts))
 
     flush_pending_function_response_parts()
 
-    print(f"Converted to {len(gemini_messages)} Gemini messages")
+    logger.info(f"Converted to {len(gemini_messages)} Gemini messages")
     if not gemini_messages:
-        print("Warning: No messages were converted. Returning a dummy user prompt to prevent API errors.")
+        logger.info("Warning: No messages were converted. Returning a dummy user prompt to prevent API errors.")
         return [types.Content(role="user", parts=[types.Part(text="Placeholder prompt: No valid input messages provided.")])]
     
     return gemini_messages
@@ -366,7 +369,7 @@ def _convert_image_to_markdown(image_data: bytes, mime_type: str) -> str:
         # Return markdown formatted image
         return f"![Image]({data_url})"
     except Exception as e:
-        print(f"Error converting image to markdown: {e}")
+        logger.info(f"Error converting image to markdown: {e}")
         return "[Image could not be displayed]"
 
 def parse_gemini_response_for_reasoning_and_content(gemini_response_candidate: Any) -> Tuple[str, str]:
@@ -409,7 +412,7 @@ def parse_gemini_response_for_reasoning_and_content(gemini_response_candidate: A
                     mime_type = getattr(file_data, 'mime_type', 'image/png')
                     # For file URIs, we can't embed directly, so we'll create a link
                     part_text = f"![Image]({file_uri})"
-                    print(f"Image file reference found: {file_uri}")
+                    logger.info(f"Image file reference found: {file_uri}")
             
             part_is_thought = hasattr(part_item, 'thought') and part_item.thought is True
 

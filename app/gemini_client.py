@@ -14,6 +14,9 @@ from google.genai import types
 
 from project_id_discovery import discover_project_id
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 
 
@@ -131,7 +134,7 @@ async def resolve_gemini_client(
             error_type="authentication_error",
         )
 
-    print(f"INFO: Attempting Vertex Express Mode for model request: {model} (base: {base_model_name})")
+    logger.info(f"Attempting Vertex Express Mode for model request: {model} (base: {base_model_name})")
     total_keys = express_key_manager.get_total_keys()
     for attempt in range(total_keys):
         key_tuple = express_key_manager.get_express_api_key()
@@ -147,25 +150,19 @@ async def resolve_gemini_client(
                         http_options=types.HttpOptions(base_url=base_url),
                     )
                     client_to_use._api_client._http_options.api_version = None
-                    print(
-                        f"INFO: Attempt {attempt + 1}/{total_keys} - Using Vertex Express Mode with custom base URL "
-                        f"for model {model} (base: {base_model_name}) with API key (original index: {original_idx})."
-                    )
+                    logger.info(f"Attempt {attempt + 1}/{total_keys} - Using Vertex Express Mode with custom base URL "
+                        f"for model {model} (base: {base_model_name}) with API key (original index: {original_idx}).")
                 else:
                     client_to_use = genai.Client(vertexai=True, api_key=key_val)
-                    print(
-                        f"INFO: Attempt {attempt + 1}/{total_keys} - Using Vertex Express Mode SDK "
-                        f"for model {model} (base: {base_model_name}) with API key (original index: {original_idx})."
-                    )
+                    logger.info(f"Attempt {attempt + 1}/{total_keys} - Using Vertex Express Mode SDK "
+                        f"for model {model} (base: {base_model_name}) with API key (original index: {original_idx}).")
                 break
             except Exception as e:
-                print(
-                    f"WARNING: Attempt {attempt + 1}/{total_keys} - Vertex Express Mode client init failed "
-                    f"for API key (original index: {original_idx}) for model {model}: {e}. Trying next key."
-                )
+                logger.warning(f"Attempt {attempt + 1}/{total_keys} - Vertex Express Mode client init failed "
+                    f"for API key (original index: {original_idx}) for model {model}: {e}. Trying next key.")
                 client_to_use = None
         else:
-            print(f"WARNING: Attempt {attempt + 1}/{total_keys} - get_express_api_key() returned None unexpectedly.")
+            logger.warning(f"Attempt {attempt + 1}/{total_keys} - get_express_api_key() returned None unexpectedly.")
             client_to_use = None
 
     if client_to_use is None:

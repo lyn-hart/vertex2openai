@@ -32,6 +32,9 @@ from gemini_client import (
     resolve_gemini_client,
 )
 
+import logging
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
@@ -80,7 +83,7 @@ async def create_message(
                 express_key_manager=express_key_manager,
             )
         except GeminiClientError as e:
-            print(f"ERROR: {e.message}")
+            logger.error(f"{e.message}")
             return _anthropic_error_response(
                 e.message, status=e.status_code, err_type=e.error_type
             )
@@ -100,10 +103,8 @@ async def create_message(
             is_max_thinking_model=features.is_max_thinking_model,
         )
 
-        print(
-            f"INFO: /v1/messages model='{request.model}' base='{base_model_name}' "
-            f"stream={bool(request.stream)} tools={bool(request.tools)}"
-        )
+        logger.info(f"/v1/messages model='{request.model}' base='{base_model_name}' "
+            f"stream={bool(request.stream)} tools={bool(request.tools)}")
 
         if request.stream:
             message_id = f"msg_{uuid.uuid4().hex[:24]}"
@@ -124,7 +125,7 @@ async def create_message(
                     for ev in assembler.finish():
                         yield ev
                 except Exception as e:
-                    print(f"ERROR: Anthropic stream failed for model '{base_model_name}': {e}")
+                    logger.error(f"Anthropic stream failed for model '{base_model_name}': {e}")
                     err_type = "rate_limit_error" if _is_upstream_429_error(e) else "api_error"
                     for ev in assembler.error_close(str(e)[:1024], err_type=err_type):
                         yield ev
@@ -145,7 +146,7 @@ async def create_message(
                 client, base_model_name, contents, gen_config
             )
         except Exception as e:
-            print(f"ERROR: Anthropic non-stream generate failed for '{base_model_name}': {e}")
+            logger.error(f"Anthropic non-stream generate failed for '{base_model_name}': {e}")
             status = 429 if _is_upstream_429_error(e) else 500
             err_type = "rate_limit_error" if status == 429 else "api_error"
             return _anthropic_error_response(str(e)[:1024], status=status, err_type=err_type)
@@ -166,7 +167,7 @@ async def create_message(
 
     except Exception as e:
         error_msg = f"Unexpected error in /v1/messages: {str(e)}"
-        print(error_msg)
+        logger.info(error_msg)
         return _anthropic_error_response(error_msg, status=500)
 
 

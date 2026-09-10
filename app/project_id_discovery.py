@@ -4,6 +4,9 @@ import re
 from typing import Dict, Optional
 import config
 
+import logging
+logger = logging.getLogger(__name__)
+
 # Global cache for project IDs: {api_key: project_id}
 PROJECT_ID_CACHE: Dict[str, str] = {}
 
@@ -29,7 +32,7 @@ async def discover_project_id(api_key: str) -> str:
     """
     # Check cache first
     if api_key in PROJECT_ID_CACHE:
-        print(f"INFO: Using cached project ID: {PROJECT_ID_CACHE[api_key]}")
+        logger.info(f"Using cached project ID: {PROJECT_ID_CACHE[api_key]}")
         return PROJECT_ID_CACHE[api_key]
     
     # Use a non-existent model to trigger error
@@ -62,7 +65,7 @@ async def discover_project_id(api_key: str) -> str:
                         if match:
                             project_id = match.group(1)
                             PROJECT_ID_CACHE[api_key] = project_id
-                            print(f"INFO: Discovered project ID: {project_id}")
+                            logger.info(f"Discovered project ID: {project_id}")
                             return project_id
                 except json.JSONDecodeError:
                     # If not JSON, try to find project ID in raw text
@@ -70,11 +73,11 @@ async def discover_project_id(api_key: str) -> str:
                     if match:
                         project_id = match.group(1)
                         PROJECT_ID_CACHE[api_key] = project_id
-                        print(f"INFO: Discovered project ID from raw response: {project_id}")
+                        logger.info(f"Discovered project ID from raw response: {project_id}")
                         return project_id
                 
                 raise Exception(f"Failed to discover project ID. Status: {response.status}, Response: {response_text[:500]}")
                 
         except Exception as e:
-            print(f"ERROR: Failed to discover project ID: {e}")
+            logger.error(f"Failed to discover project ID: {e}")
             raise

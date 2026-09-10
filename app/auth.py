@@ -1,6 +1,6 @@
 from fastapi import HTTPException, Header
 from typing import Optional
-from config import API_KEY
+from config import PROXY_API_KEY
 
 
 # Function to validate API key (moved from config.py)
@@ -8,10 +8,9 @@ def validate_api_key(api_key_to_validate: str) -> bool:
     """
     Validate the provided API key against the configured key.
     """
-    if not API_KEY: # API_KEY is imported from config
-        # If no API key is configured, authentication is disabled (or treat as invalid)
+    if not PROXY_API_KEY:
         return False
-    return api_key_to_validate == API_KEY
+    return api_key_to_validate == PROXY_API_KEY
 
 
 def _extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
