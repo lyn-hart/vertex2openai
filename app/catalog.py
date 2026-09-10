@@ -19,7 +19,6 @@ BUILTIN_EXPRESS_MODELS: List[str] = [
     "gemini-2.5-pro",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
-    "gemini-2.5-flash-image",
     "gemini-3-pro-image",
     "gemini-3-flash-preview",
     "gemini-3.1-pro-preview",
