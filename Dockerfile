@@ -11,12 +11,8 @@ RUN pip cache purge && pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY app/ .
 
-# Create a directory for the credentials
-RUN mkdir -p /app/credentials
-
-# Expose the port
+# Expose the port (matches the port uvicorn listens on below)
 EXPOSE 8050
 
 # Command to run the application
-# Use the default Hugging Face port 7860
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8050"]

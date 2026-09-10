@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from auth import get_api_key
 from anthropic_models import AnthropicMessagesRequest
-from anthropic_messages import (
+from translate_anthropic import (
     anthropic_error,
     count_tokens_for_request,
     create_anthropic_gemini_contents,
@@ -21,16 +21,15 @@ from anthropic_messages import (
     gemini_response_to_anthropic,
     GeminiAnthropicStreamAssembler,
 )
-from api_helpers import (
-    generate_gemini_content,
-    stream_gemini_content,
+from client import (
     _is_upstream_429_error,
-)
-from gemini_client import (
-    GeminiClientError,
+    generate_gemini_content,
     parse_model_features,
-    resolve_gemini_client,
+    stream_gemini_content,
 )
+
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -70,39 +69,8 @@ async def create_message(
 
     try:
         features = parse_model_features(request.model)
-        # Anthropic MVP does not support OpenAI-direct / encrypt / auto suffixes
-        if features.is_openai_direct_model:
-            return _anthropic_error_response(
-                f"Model '{request.model}' uses OpenAI-direct suffix which is not supported on /v1/messages. "
-                "Use a native Gemini model name (optionally with [PAY], -search, -nothinking, -max).",
-                status=400,
-                err_type="invalid_request_error",
-            )
-
         base_model_name = features.base_model_name
-        credential_manager = fastapi_request.app.state.credential_manager
         express_key_manager = fastapi_request.app.state.express_key_manager
-
-        try:
-            client = await resolve_gemini_client(
-                model=request.model,
-                base_model_name=base_model_name,
-                is_express_model_request=features.is_express_model_request,
-                is_pay_model_request=features.is_pay_model_request,
-                credential_manager=credential_manager,
-                express_key_manager=express_key_manager,
-            )
-        except GeminiClientError as e:
-            print(f"ERROR: {e.message}")
-            return _anthropic_error_response(
-                e.message, status=e.status_code, err_type=e.error_type
-            )
-
-        if client is None:
-            return _anthropic_error_response(
-                "Critical internal server error: Gemini client not initialized.",
-                status=500,
-            )
 
         contents = create_anthropic_gemini_contents(request.messages)
         gen_config = create_anthropic_generation_config(
@@ -113,10 +81,8 @@ async def create_message(
             is_max_thinking_model=features.is_max_thinking_model,
         )
 
-        print(
-            f"INFO: /v1/messages model='{request.model}' base='{base_model_name}' "
-            f"stream={bool(request.stream)} tools={bool(request.tools)}"
-        )
+        logger.info(f"/v1/messages model='{request.model}' base='{base_model_name}' "
+            f"stream={bool(request.stream)} tools={bool(request.tools)}")
 
         if request.stream:
             message_id = f"msg_{uuid.uuid4().hex[:24]}"
@@ -130,14 +96,14 @@ async def create_message(
                 )
                 try:
                     async for chunk in stream_gemini_content(
-                        client, base_model_name, contents, gen_config
+                        express_key_manager, base_model_name, contents, gen_config
                     ):
                         for ev in assembler.process_chunk(chunk):
                             yield ev
                     for ev in assembler.finish():
                         yield ev
                 except Exception as e:
-                    print(f"ERROR: Anthropic stream failed for model '{base_model_name}': {e}")
+                    logger.error(f"Anthropic stream failed for model '{base_model_name}': {e}")
                     err_type = "rate_limit_error" if _is_upstream_429_error(e) else "api_error"
                     for ev in assembler.error_close(str(e)[:1024], err_type=err_type):
                         yield ev
@@ -155,10 +121,10 @@ async def create_message(
         # Non-streaming
         try:
             response_obj = await generate_gemini_content(
-                client, base_model_name, contents, gen_config
+                express_key_manager, base_model_name, contents, gen_config
             )
         except Exception as e:
-            print(f"ERROR: Anthropic non-stream generate failed for '{base_model_name}': {e}")
+            logger.error(f"Anthropic non-stream generate failed for '{base_model_name}': {e}")
             status = 429 if _is_upstream_429_error(e) else 500
             err_type = "rate_limit_error" if status == 429 else "api_error"
             return _anthropic_error_response(str(e)[:1024], status=status, err_type=err_type)
@@ -179,7 +145,7 @@ async def create_message(
 
     except Exception as e:
         error_msg = f"Unexpected error in /v1/messages: {str(e)}"
-        print(error_msg)
+        logger.info(error_msg)
         return _anthropic_error_response(error_msg, status=500)
 
 

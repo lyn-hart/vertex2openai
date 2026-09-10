@@ -16,13 +16,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from google.genai import types
 
-from message_processing import (
+from translate_openai import (
     _build_function_call_part,
     _build_function_response_part,
     _decode_tool_call_id_thought_signature,
     _encode_tool_call_id_with_thought_signature,
     parse_gemini_response_for_reasoning_and_content,
 )
+
+import logging
+logger = logging.getLogger(__name__)
 
 
 # ── text / content helpers ──────────────────────────────────────────────────
@@ -100,7 +103,7 @@ def _image_to_gemini_part(block: dict) -> Optional[types.Part]:
             raw = base64.b64decode(data)
             return types.Part.from_bytes(data=raw, mime_type=media)
         except Exception as e:
-            print(f"Warning: Failed to decode Anthropic base64 image: {e}")
+            logger.info(f"Warning: Failed to decode Anthropic base64 image: {e}")
             return None
     if stype == "url":
         url = source.get("url") or ""
@@ -113,7 +116,7 @@ def _image_to_gemini_part(block: dict) -> Optional[types.Part]:
                 raw = base64.b64decode(b64)
                 return types.Part.from_bytes(data=raw, mime_type=media)
             except Exception as e:
-                print(f"Warning: Failed to decode data-URL image: {e}")
+                logger.info(f"Warning: Failed to decode data-URL image: {e}")
                 return None
         # Remote URLs not fetched here; pass as text reference
         if url:
@@ -145,7 +148,7 @@ def create_anthropic_gemini_contents(
     tool_name_by_id is optional pre-seeded map of tool_use_id → function name
     for tool_result blocks that omit the name (Claude Code always uses tool_use_id).
     """
-    print("Converting Anthropic messages to Gemini format...")
+    logger.info("Converting Anthropic messages to Gemini format...")
     gemini_messages: List[types.Content] = []
     name_map: Dict[str, str] = dict(tool_name_by_id or {})
     pending_function_response_parts: List[types.Part] = []
@@ -284,7 +287,7 @@ def create_anthropic_gemini_contents(
             if parts:
                 gemini_messages.append(types.Content(role="model", parts=parts))
             else:
-                print(f"Skipping empty assistant message at index {idx}")
+                logger.info(f"Skipping empty assistant message at index {idx}")
 
         elif role in ("system", "developer"):
             # Prefer top-level system; if mid-conversation system appears, treat as user
@@ -305,7 +308,7 @@ def create_anthropic_gemini_contents(
     flush_pending_function_response_parts()
 
     if not gemini_messages:
-        print("Warning: No Anthropic messages converted. Using placeholder user prompt.")
+        logger.info("Warning: No Anthropic messages converted. Using placeholder user prompt.")
         return [
             types.Content(
                 role="user",
@@ -313,7 +316,7 @@ def create_anthropic_gemini_contents(
             )
         ]
 
-    print(f"Converted to {len(gemini_messages)} Gemini messages")
+    logger.info(f"Converted to {len(gemini_messages)} Gemini messages")
     return gemini_messages
 
 
