@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from auth import get_api_key
 from anthropic_models import AnthropicMessagesRequest
-from anthropic_messages import (
+from translate_anthropic import (
     anthropic_error,
     count_tokens_for_request,
     create_anthropic_gemini_contents,
@@ -21,14 +21,11 @@ from anthropic_messages import (
     gemini_response_to_anthropic,
     GeminiAnthropicStreamAssembler,
 )
-from api_helpers import (
-    generate_gemini_content,
-    stream_gemini_content,
-)
 from client import (
-    GeminiClientError,
     _is_upstream_429_error,
+    generate_gemini_content,
     parse_model_features,
+    stream_gemini_content,
 )
 
 import logging

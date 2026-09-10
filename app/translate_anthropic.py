@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from google.genai import types
 
-from message_processing import (
+from translate_openai import (
     _build_function_call_part,
     _build_function_response_part,
     _decode_tool_call_id_thought_signature,

@@ -2,16 +2,12 @@ import json
 import time
 import math
 import asyncio
-from typing import List, Dict, Any, Callable, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi.responses import JSONResponse, StreamingResponse
 from google.genai import types
 
 from models import OpenAIRequest, OpenAIMessage
-from message_processing import (
-    convert_to_openai_format,
-    convert_chunk_to_openai,
-)
 import config as app_config
 from config import VERTEX_REASONING_TAG
 from client import (
@@ -19,6 +15,12 @@ from client import (
     generate_gemini_content,
     stream_gemini_content,
     _is_upstream_429_error,
+)
+from translate_openai import (
+    convert_to_openai_format,
+    convert_chunk_to_openai,
+    create_openai_error_response,
+    is_gemini_response_valid,
 )
 
 import logging
@@ -107,114 +109,6 @@ class StreamingReasoningProcessor:
         self.tag_buffer, self.reasoning_buffer = "", ""
         return remaining_content, remaining_reasoning
 
-def create_openai_error_response(status_code: int, message: str, error_type: str) -> Dict[str, Any]:
-    return {"error": {"message": message, "type": error_type, "code": status_code, "param": None}}
-
-
-def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
-    config: Dict[str, Any] = {}
-    
-    # Check for -2k or -4k suffix to add image generation capabilities
-    model_name = request.model
-    if model_name.endswith('-2k'):
-        # Add image generation config for 2k resolution
-        config["responseModalities"] = ["TEXT", "IMAGE"]
-        config["imageConfig"] = {"imageSize": "2k"}
-        logger.info(f"Detected -2k suffix, adding image generation config with 2k resolution")
-    elif model_name.endswith('-4k'):
-        # Add image generation config for 4k resolution
-        config["responseModalities"] = ["TEXT", "IMAGE"]
-        config["imageConfig"] = {"imageSize": "4k"}
-        logger.info(f"Detected -4k suffix, adding image generation config with 4k resolution")
-    
-    if request.temperature is not None: config["temperature"] = request.temperature
-    if request.max_tokens is not None: config["max_output_tokens"] = request.max_tokens
-    if request.top_p is not None: config["top_p"] = request.top_p
-    if request.top_k is not None: config["top_k"] = request.top_k
-    if request.stop is not None: config["stop_sequences"] = request.stop
-    if request.seed is not None: config["seed"] = request.seed
-    if request.n is not None: config["candidate_count"] = request.n
-    
-    safety_threshold = "BLOCK_NONE"
-    config["safety_settings"] = [
-            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold=safety_threshold),
-            types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold=safety_threshold),
-            types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold=safety_threshold),
-            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold=safety_threshold),
-            types.SafetySetting(category="HARM_CATEGORY_CIVIC_INTEGRITY", threshold=safety_threshold),
-            types.SafetySetting(category="HARM_CATEGORY_UNSPECIFIED", threshold=safety_threshold),
-            types.SafetySetting(category="HARM_CATEGORY_IMAGE_HATE", threshold=safety_threshold),
-            types.SafetySetting(category="HARM_CATEGORY_IMAGE_DANGEROUS_CONTENT", threshold=safety_threshold),
-            types.SafetySetting(category="HARM_CATEGORY_IMAGE_HARASSMENT", threshold=safety_threshold),
-            types.SafetySetting(category="HARM_CATEGORY_IMAGE_SEXUALLY_EXPLICIT", threshold=safety_threshold),
-            types.SafetySetting(category="HARM_CATEGORY_JAILBREAK", threshold=safety_threshold)
-    ]
-    # config["thinking_config"] = {"include_thoughts": True}
-
-    # 1. Add tools (function declarations)
-    # Prefer parameters_json_schema so richer JSON Schema fields from clients
-    # (propertyNames, exclusiveMinimum, etc.) do not fail typed Schema validation.
-    function_declarations = []
-    if request.tools:
-        for tool in request.tools:
-            if tool.get("type") == "function":
-                func_def = tool.get("function")
-                if func_def and func_def.get("name"):
-                    kwargs = {"name": func_def.get("name")}
-                    if func_def.get("description") is not None:
-                        kwargs["description"] = func_def.get("description")
-                    parameters = func_def.get("parameters")
-                    if isinstance(parameters, dict):
-                        cleaned = {k: v for k, v in parameters.items() if k not in ("$schema", "$id", "$comment")}
-                        kwargs["parameters_json_schema"] = cleaned
-                    elif parameters is not None:
-                        kwargs["parameters_json_schema"] = parameters
-                    function_declarations.append(types.FunctionDeclaration(**kwargs))
-
-    if function_declarations:
-        config["tools"] = [types.Tool(function_declarations=function_declarations)]
-
-    # 2. Add tool_config (based on tool_choice)
-    tool_config = None
-    if request.tool_choice:
-        choice = request.tool_choice
-        mode = None
-        allowed_functions = None
-        if isinstance(choice, str):
-            if choice == "none":
-                mode = "NONE"
-            elif choice == "auto":
-                mode = "AUTO"
-        elif isinstance(choice, dict) and choice.get("type") == "function":
-            func_name = choice.get("function", {}).get("name")
-            if func_name:
-                mode = "ANY"  # 'ANY' mode is used to force a specific function call
-                allowed_functions = [func_name]
-        
-        # If a valid mode was parsed, build the tool_config
-        if mode:
-            config_dict = {"mode": mode}
-            if allowed_functions:
-                config_dict["allowed_function_names"] = allowed_functions
-            tool_config = {"function_calling_config": config_dict}
-    
-    if tool_config:
-        config["tool_config"] = tool_config
-        
-    return config
-
-
-def is_gemini_response_valid(response: Any) -> bool:
-    if response is None: return False
-    if hasattr(response, 'text') and isinstance(response.text, str) and response.text.strip(): return True
-    if hasattr(response, 'candidates') and response.candidates:
-        for cand in response.candidates:
-            if hasattr(cand, 'text') and isinstance(cand.text, str) and cand.text.strip(): return True
-            if hasattr(cand, 'content') and hasattr(cand.content, 'parts') and cand.content.parts:
-                for part in cand.content.parts:
-                    if hasattr(part, 'function_call'): return True 
-                    if hasattr(part, 'text') and isinstance(getattr(part, 'text', None), str) and getattr(part, 'text', '').strip(): return True
-    return False
 
 async def _chunk_openai_response_dict_for_sse(
     openai_response_dict: Dict[str, Any],

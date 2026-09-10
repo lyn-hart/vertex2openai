@@ -6,7 +6,7 @@ from config import config_summary, validate_config
 
 # Local module imports
 from auth import get_api_key # Potentially for root endpoint
-from express_key_manager import ExpressKeyManager
+from keys import ExpressKeyManager
 from catalog import refresh_models_config_cache
 
 # Routers

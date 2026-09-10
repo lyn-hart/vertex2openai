@@ -7,12 +7,12 @@ from google.genai import types
 # Local module imports
 from models import OpenAIRequest
 from auth import get_api_key
-from message_processing import create_gemini_prompt
-from api_helpers import (
-    create_generation_config, # Corrected import name
+from translate_openai import (
+    create_gemini_prompt,
+    create_generation_config,
     create_openai_error_response,
-    execute_gemini_call,
 )
+from streaming import execute_gemini_call
 from client import (
     parse_model_features,
     apply_thinking_config,
