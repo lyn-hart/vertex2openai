@@ -67,6 +67,14 @@ The model list comes from `MODELS_CONFIG_URL` (or the built-in fallback in [`app
 
 The `[PAY]`, `[EXPRESS]` prefixes and `-encrypt`, `-encrypt-full`, `-auto`, `-openai`, `-openaisearch` suffixes are no longer recognized.
 
+**Grounded search without the suffix** — pass one of these request-body params on `/v1/chat/completions`:
+
+```json
+{"model": "gemini-2.5-flash", "search": true, "messages": [...]}
+```
+
+`web_search_options: {...}` (OpenAI's parameter) also enables it. On `/v1/messages`, include an Anthropic `web_search_*` tool in the `tools` array. When search grounding runs, the response text is appended with a markdown **Sources:** list of the retrieved pages.
+
 ## Usage
 
 ### OpenAI clients
