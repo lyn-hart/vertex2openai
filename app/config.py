@@ -64,7 +64,7 @@ RETRY_COUNT = _get_int_env("RETRY_COUNT", 3, minimum=0)
 RETRY_INTERVAL_MS = _get_int_env("RETRY_INTERVAL_MS", 1000, minimum=0)
 
 # URL for the remote JSON file containing model lists
-MODELS_CONFIG_URL = os.environ.get("MODELS_CONFIG_URL", "https://raw.githubusercontent.com/ldsx163/vertex2openai/refs/heads/main/vertexModels.json")
+MODELS_CONFIG_URL = os.environ.get("MODELS_CONFIG_URL", "https://raw.githubusercontent.com/lyn-hart/vertex2openai/refs/heads/main/vertexModels.json")
 
 # Constant for the Vertex reasoning tag
 VERTEX_REASONING_TAG = "vertex_think_tag"

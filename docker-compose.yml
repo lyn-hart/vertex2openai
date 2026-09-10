@@ -22,5 +22,5 @@ services:
       # Fixed interval between upstream 429 retries in milliseconds (default: 1000)
       - RETRY_INTERVAL_MS=1000
       # Remote model list URL
-      - MODELS_CONFIG_URL=https://raw.githubusercontent.com/ldsx163/vertex2openai/refs/heads/main/vertexModels.json
+      - MODELS_CONFIG_URL=https://raw.githubusercontent.com/lyn-hart/vertex2openai/refs/heads/main/vertexModels.json
     restart: unless-stopped
