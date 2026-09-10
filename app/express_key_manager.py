@@ -6,7 +6,6 @@ import config as app_config
 class ExpressKeyManager:
     """
     Manager for Vertex Express API keys with support for both random and round-robin selection strategies.
-    Similar to CredentialManager but specifically for Express API keys.
     """
     
     def __init__(self):
