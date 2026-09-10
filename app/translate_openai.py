@@ -690,18 +690,18 @@ def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
     # Request-body thinking params -> thinking_config
     _apply_thinking_params(request, config)
 
-    # Check for -2k or -4k suffix to add image generation capabilities
+    # Check for -2k or -4k suffix to add image generation capabilities.
+    # The suffix stays lowercase (public API), but imageSize must use the
+    # SDK's documented enum values, which are uppercase: 1K / 2K / 4K.
     model_name = request.model
     if model_name.endswith('-2k'):
-        # Add image generation config for 2k resolution
         config["responseModalities"] = ["TEXT", "IMAGE"]
-        config["imageConfig"] = {"imageSize": "2k"}
-        logger.info(f"Detected -2k suffix, adding image generation config with 2k resolution")
+        config["imageConfig"] = {"imageSize": "2K"}
+        logger.info("Detected -2k suffix, adding image generation config with 2K resolution")
     elif model_name.endswith('-4k'):
-        # Add image generation config for 4k resolution
         config["responseModalities"] = ["TEXT", "IMAGE"]
-        config["imageConfig"] = {"imageSize": "4k"}
-        logger.info(f"Detected -4k suffix, adding image generation config with 4k resolution")
+        config["imageConfig"] = {"imageSize": "4K"}
+        logger.info("Detected -4k suffix, adding image generation config with 4K resolution")
     
     if request.temperature is not None: config["temperature"] = request.temperature
     if request.max_tokens is not None: config["max_output_tokens"] = request.max_tokens
