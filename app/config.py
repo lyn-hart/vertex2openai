@@ -37,10 +37,6 @@ DEFAULT_PASSWORD = "123456"
 # Get password from environment variable or use default
 API_KEY = os.environ.get("API_KEY", DEFAULT_PASSWORD)
 
-# HuggingFace Authentication Settings
-HUGGINGFACE = os.environ.get("HUGGINGFACE", "false").lower() == "true"
-HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "") # Default to empty string, auth logic will verify if HF_MODE is true and this key is needed
-
 # API Key for Vertex Express Mode
 raw_vertex_keys = os.environ.get("VERTEX_EXPRESS_API_KEY")
 if raw_vertex_keys:
@@ -65,10 +61,6 @@ VERTEX_REASONING_TAG = "vertex_think_tag"
 
 # Round-robin credential selection strategy
 ROUNDROBIN = os.environ.get("ROUNDROBIN", "false").lower() == "true"
-
-# Safety score display setting
-SAFETY_SCORE = os.environ.get("SAFETY_SCORE", "false").lower() == "true"
-# Validation logic moved to app/auth.py
 
 # Proxy settings
 PROXY_URL = os.environ.get("PROXY_URL")

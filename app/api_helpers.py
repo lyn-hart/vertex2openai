@@ -13,7 +13,6 @@ from message_processing import (
     convert_to_openai_format,
     convert_chunk_to_openai,
     extract_reasoning_by_tags,
-    _create_safety_ratings_html
 )
 import config as app_config
 from config import VERTEX_REASONING_TAG
