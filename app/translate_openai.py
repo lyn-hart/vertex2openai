@@ -659,38 +659,29 @@ def create_openai_error_response(status_code: int, message: str, error_type: str
 # Values are capped at 24576: gemini-2.5-flash rejects budgets above that
 # ("thinking_budget is out of range; supported values are integers from 1 to
 # 24576"). Per-model ceilings vary, so max/xhigh map to 24576, not 32768.
-_EFFORT_TO_THINKING_BUDGET: Dict[str, int] = {
-    "none": 0,
-    "minimal": 512,
-    "low": 2048,
-    "medium": 8192,
-    "high": 16384,
-    "xhigh": 24576,
-    "max": 24576,
-    "ultrathink": 24576,
-    "ultra": 24576,
-}
-
-# Upper bound accepted by all current Express models.
-_THINKING_BUDGET_CEILING = 24576
+# Gemini 3.x models take thinking_level enums instead — see
+# client.resolve_thinking_config, which both paths use.
+from client import resolve_thinking_config
 
 
 def _apply_thinking_params(request: OpenAIRequest, config: Dict[str, Any]) -> None:
     """Map request-body thinking params (reasoning_effort / thinking_budget)
-    into the Gemini thinking_config. Explicit numeric budgets win over labels
-    and are clamped to the model-supported ceiling."""
-    if request.thinking_budget is not None:
-        budget = max(0, min(int(request.thinking_budget), _THINKING_BUDGET_CEILING))
-    elif request.reasoning_effort is not None:
-        budget = _EFFORT_TO_THINKING_BUDGET.get(str(request.reasoning_effort).strip().lower())
-        if budget is None:
+    into the Gemini thinking_config. Explicit numeric budgets win over labels.
+
+    Gemini 3.x models: effort labels map to thinking_level enums
+    (MINIMAL/LOW/MEDIUM/HIGH). Gemini 2.5: labels and budgets map to
+    thinking_budget numbers."""
+    resolved = resolve_thinking_config(
+        request.model,
+        effort=request.reasoning_effort,
+        budget=request.thinking_budget,
+    )
+    if not resolved:
+        if request.reasoning_effort is not None:
             logger.warning("Unknown reasoning_effort %r; ignoring.", request.reasoning_effort)
-            return
-    else:
         return
     config.setdefault("thinking_config", {})
-    config["thinking_config"]["thinking_budget"] = budget
-    config["thinking_config"]["include_thoughts"] = budget > 0
+    config["thinking_config"].update(resolved)
 
 
 def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:

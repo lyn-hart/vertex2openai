@@ -461,6 +461,42 @@ _EFFORT_TO_THINKING_BUDGET: Dict[str, int] = {
 }
 
 
+def _explicit_budget_tokens(thinking: Any) -> Optional[int]:
+    """Return budget_tokens if the thinking param carries an explicit number
+    ({"type": "enabled", "budget_tokens": N}), else None."""
+    if isinstance(thinking, dict):
+        for key in ("budget_tokens", "budget"):
+            val = thinking.get(key)
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                return max(0, int(val))
+    return None
+
+
+def _explicit_effort_label(thinking: Any) -> Optional[str]:
+    """Return the effort label if the thinking param carries one explicitly
+    ({"type": "enabled", "effort": "high"}), else None."""
+    if isinstance(thinking, dict):
+        effort = thinking.get("effort")
+        if isinstance(effort, str) and effort.strip():
+            return effort.strip().lower()
+    return None
+
+
+def _effort_label_from_request(request: Any) -> Optional[str]:
+    """Top-level effort fields (Claude Code style), as a raw label."""
+    for attr in ("effort", "thinking_effort", "reasoning_effort"):
+        val = getattr(request, attr, None)
+        if val is None and hasattr(request, "model_extra") and isinstance(request.model_extra, dict):
+            val = request.model_extra.get(attr)
+        if isinstance(val, str) and val.strip():
+            return val.strip().lower()
+        if isinstance(val, dict):
+            for key in ("effort", "level", "thinking_effort", "reasoning_effort"):
+                if isinstance(val.get(key), str) and val[key].strip():
+                    return val[key].strip().lower()
+    return None
+
+
 def _effort_label_to_budget(label: Any) -> Optional[int]:
     """Map effort-like string labels to a Gemini thinking_budget, or None if unknown."""
     if not isinstance(label, str):
@@ -667,16 +703,26 @@ def create_anthropic_generation_config(
     if "gemini-2.5-flash-lite" in base_model_name or "image" in base_model_name:
         config["thinking_config"]["include_thoughts"] = False
 
-    # Priority: request.thinking → top-level effort fields → model suffix overrides
+    # Priority: request.thinking → top-level effort fields.
+    # Gemini 3.x: effort labels map to thinking_level enums; 2.5: budgets.
     anth_budget = _thinking_budget_from_anthropic(getattr(request, "thinking", None))
     if anth_budget is None:
         anth_budget = _effort_from_request(request)
-    if anth_budget is not None:
+    anth_effort = _explicit_effort_label(getattr(request, "thinking", None))
+    if anth_effort is None:
+        anth_effort = _effort_label_from_request(request)
+    # An explicit budget_tokens number beats the label; a budget derived
+    # FROM the label must not (otherwise the label never reaches the
+    # generation-based routing).
+    explicit_budget = _explicit_budget_tokens(getattr(request, "thinking", None))
+    if anth_effort is not None:
+        from client import resolve_thinking_config
+        resolved = resolve_thinking_config(base_model_name, effort=anth_effort, budget=explicit_budget)
+        if resolved:
+            config["thinking_config"].update(resolved)
+    elif anth_budget is not None:
         config["thinking_config"]["thinking_budget"] = anth_budget
-        if anth_budget == 0:
-            config["thinking_config"]["include_thoughts"] = False
-        else:
-            config["thinking_config"]["include_thoughts"] = True
+        config["thinking_config"]["include_thoughts"] = anth_budget > 0
 
     return config
 

@@ -63,6 +63,86 @@ def parse_model_features(model: str) -> ModelFeatures:
     )
 
 
+# ── thinking parameter mapping ──────────────────────────────────────────────
+
+# Effort labels accepted from clients (OpenAI reasoning_effort and Anthropic
+# effort). For Gemini 2.5 models these map to token budgets (2.5 only accepts
+# thinking_budget); for Gemini 3.x they map to thinking_level enum values
+# (xhigh/max collapse to HIGH — the 3-series enum tops out there).
+EFFORT_TO_THINKING_BUDGET: dict = {
+    "none": 0,
+    "minimal": 512,
+    "low": 2048,
+    "medium": 8192,
+    "high": 16384,
+    "xhigh": 24576,
+    "max": 24576,
+    "ultrathink": 24576,
+    "ultra": 24576,
+}
+
+EFFORT_TO_THINKING_LEVEL: dict = {
+    "none": "MINIMAL",       # 3-series models have no "off" switch
+    "minimal": "MINIMAL",
+    "low": "LOW",
+    "medium": "MEDIUM",
+    "high": "HIGH",
+    "xhigh": "HIGH",
+    "max": "HIGH",
+    "ultrathink": "HIGH",
+    "ultra": "HIGH",
+}
+
+# Upper bound accepted by all current Express 2.5-series models
+# (gemini-2.5-flash rejects budgets above 24576).
+THINKING_BUDGET_CEILING = 24576
+
+
+def is_gemini3_model(base_model_name: str) -> bool:
+    """True for Gemini 3.x models, which take thinking_level instead of
+    (or in addition to) thinking_budget."""
+    return base_model_name.startswith("gemini-3")
+
+
+def resolve_thinking_config(
+    base_model_name: str,
+    effort: Optional[str] = None,
+    budget: Optional[int] = None,
+) -> dict:
+    """
+    Translate client thinking params into a Gemini thinking_config fragment.
+
+    Returns {} when neither param is given. Numeric budgets win over effort
+    labels, except on Gemini 3.x where an effort label maps to thinking_level
+    (the service converts it to the model's proper budget).
+
+    Accepts an already-built budget-only fragment for 2.5-series reuse.
+    """
+    base = base_model_name or ""
+
+    if budget is not None:
+        if is_gemini3_model(base):
+            # 3-series still accepts explicit budgets; clamp to the common ceiling.
+            return {"thinking_budget": max(0, min(int(budget), THINKING_BUDGET_CEILING)),
+                    "include_thoughts": int(budget) > 0}
+        return {"thinking_budget": max(0, min(int(budget), THINKING_BUDGET_CEILING)),
+                "include_thoughts": int(budget) > 0}
+
+    if effort is not None:
+        key = str(effort).strip().lower()
+        if is_gemini3_model(base):
+            level = EFFORT_TO_THINKING_LEVEL.get(key)
+            if level is None:
+                return {}
+            return {"thinking_level": level, "include_thoughts": level != "MINIMAL" or key != "none"}
+        budget_val = EFFORT_TO_THINKING_BUDGET.get(key)
+        if budget_val is None:
+            return {}
+        return {"thinking_budget": budget_val, "include_thoughts": budget_val > 0}
+
+    return {}
+
+
 def apply_thinking_config(
     gen_config_dict: dict,
     base_model_name: str,
