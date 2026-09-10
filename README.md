@@ -1,232 +1,116 @@
----
-title: OpenAI to Gemini Adapter
-emoji: 🔄☁️
-colorFrom: blue
-colorTo: green
-sdk: docker
-app_port: 7860 # Default Port exposed by Dockerfile, used by Hugging Face Spaces
----
+# vertex2openai
 
-# OpenAI to Gemini Adapter
+An adapter that exposes **Google Vertex AI Gemini models through the Express API** behind two client-facing protocols:
 
-This service acts as a compatibility layer, providing an OpenAI-compatible API interface that translates requests to Google's Vertex AI Gemini models. This allows you to leverage the power of Gemini models (including Gemini 1.5 Pro and Flash) using tools and applications originally built for the OpenAI API.
+- **OpenAI-compatible** — `GET /v1/models`, `POST /v1/chat/completions`
+- **Anthropic Messages** — `POST /v1/messages`, `POST /v1/messages/count_tokens` (works with Claude Code and the Anthropic SDKs)
 
-The codebase is designed with modularity and maintainability in mind, located primarily within the [`app/`](app/) directory.
+There is exactly one upstream auth method: **Vertex Express API keys**. Service accounts, credential files, and the OpenAI-direct channel have been removed.
 
-## Key Features
+## Getting started
 
--   **OpenAI-Compatible Endpoints:** Provides standard [`/v1/chat/completions`](app/routes/chat_api.py:0) and [`/v1/models`](app/routes/models_api.py:0) endpoints.
--   **Anthropic Messages (Claude Code):** Provides [`/v1/messages`](app/routes/messages_api.py) and [`/v1/messages/count_tokens`](app/routes/messages_api.py) for Claude Code / Anthropic SDK clients (Gemini-direct conversion).
--   **Broad Model Support:** Seamlessly translates requests for various Gemini models (e.g., `gemini-1.5-pro-latest`, `gemini-1.5-flash-latest`). Check the [`/v1/models`](app/routes/models_api.py:0) endpoint for currently available models based on your Vertex AI Project.
--   **Multiple Credential Management Methods:**
-    -   **Vertex AI Express API Key:** Use a specific [`VERTEX_EXPRESS_API_KEY`](app/config.py:0) for simplified authentication with eligible models.
-    -   **Google Cloud Service Accounts:**
-        -   Provide the JSON key content directly via the [`GOOGLE_CREDENTIALS_JSON`](app/config.py:0) environment variable.
-        -   Place multiple service account `.json` files in a designated directory ([`CREDENTIALS_DIR`](app/config.py:0)).
--   **Smart Credential Selection:**
-    -   Uses the `ExpressKeyManager` for dedicated Vertex AI Express API key handling.
-    -   Employs `CredentialManager` for robust service account management.
-    -   Supports **round-robin rotation** ([`ROUNDROBIN=true`](app/config.py:0)) when multiple service account credentials are provided (either via [`GOOGLE_CREDENTIALS_JSON`](app/config.py:0) or [`CREDENTIALS_DIR`](app/config.py:0)), distributing requests across credentials.
--   **Streaming & Non-Streaming:** Handles both response types correctly.
--   **OpenAI Direct Mode Enhancements:** Includes tag-based extraction for reasoning/tool use information when interacting directly with certain OpenAI models (if configured).
--   **Dockerized:** Ready for deployment via Docker Compose locally or on platforms like Hugging Face Spaces.
--   **Centralized Configuration:** Environment variables managed via [`app/config.py`](app/config.py).
-
-## Hugging Face Spaces Deployment (Recommended)
-
-1.  **Create a Space:** On Hugging Face Spaces, create a new "Docker" SDK Space.
-2.  **Upload Files:** Add all project files ([`app/`](app/) directory, [`.gitignore`](.gitignore), [`Dockerfile`](Dockerfile), [`docker-compose.yml`](docker-compose.yml), [`requirements.txt`](app/requirements.txt), etc.) to the repository.
-3.  **Configure Secrets:** In Space settings -> Secrets, add:
-    *   `API_KEY`: Your desired API key to protect this adapter service (required).
-    *   *Choose one credential method:*
-        *   `GOOGLE_CREDENTIALS_JSON`: The **full content** of your Google Cloud service account JSON key file(s). Separate multiple keys with commas if providing more than one within this variable.
-        *   Or provide individual files if your deployment setup supports mounting volumes (less common on standard HF Spaces).
-    *   `VERTEX_EXPRESS_API_KEY` (Optional): Add your Vertex AI Express API key if you plan to use Express Mode.
-    *   `ROUNDROBIN` (Optional): Set to `true` to enable round-robin rotation for service account credentials.
-    *   Other variables from the "Key Environment Variables" section can be set here to override defaults.
-4.  **Deploy:** Hugging Face automatically builds and deploys the container, exposing port 7860.
-
-## Local Docker Setup
-
-### Prerequisites
-
--   Docker and Docker Compose
--   Google Cloud Project with Vertex AI enabled.
--   Credentials: Either a Vertex AI Express API Key or one or more Service Account key files.
-
-### Credential Setup (Local)
-
-Manage environment variables using a [`.env`](.env) file in the project root (ignored by git) or within your [`docker-compose.yml`](docker-compose.yml).
-
-1.  **Method 1: Vertex Express API Key**
-    *   Set the [`VERTEX_EXPRESS_API_KEY`](app/config.py:0) environment variable.
-2.  **Method 2: Service Account JSON Content**
-    *   Set [`GOOGLE_CREDENTIALS_JSON`](app/config.py:0) to the full JSON content of your service account key(s). For multiple keys, separate the JSON objects with a comma (e.g., `{...},{...}`).
-3.  **Method 3: Service Account Files in Directory**
-    *   Ensure [`GOOGLE_CREDENTIALS_JSON`](app/config.py:0) is *not* set.
-    *   Create a directory (e.g., `mkdir credentials`).
-    *   Place your service account `.json` key files inside this directory.
-    *   Mount this directory to `/app/credentials` in the container (as shown in the default [`docker-compose.yml`](docker-compose.yml)). The service will use files found in the directory specified by [`CREDENTIALS_DIR`](app/config.py:0) (defaults to `/app/credentials`).
-
-### Environment Variables (`.env` file example)
-
-```env
-API_KEY="your_secure_api_key_here" # REQUIRED: Set a strong key for security
-
-# --- Choose *ONE* primary credential method ---
-# VERTEX_EXPRESS_API_KEY="your_vertex_express_key"          # Option 1: Express Key
-# GOOGLE_CREDENTIALS_JSON='{"type": ...}{"type": ...}' # Option 2: JSON content (comma-separate multiple keys)
-# CREDENTIALS_DIR="/app/credentials"                      # Option 3: Directory path (Default if GOOGLE_CREDENTIALS_JSON is unset, ensure volume mount in docker-compose)
-# ---
-
-# --- Optional Settings ---
-# ROUNDROBIN="true"              # Enable round-robin for Service Accounts (Method 2 or 3)
-# FAKE_STREAMING="false"         # For debugging - simulate streaming
-# FAKE_STREAMING_INTERVAL="1.0"  # Interval for fake streaming keep-alives
-# RETRY_COUNT="3"   # Retries after an upstream 429 before returning an error; set 0 to disable
-# RETRY_INTERVAL_MS="1000" # Fixed interval between upstream 429 retries (milliseconds)
-# GCP_PROJECT_ID="your-gcp-project-id" # Explicitly set GCP Project ID if needed
-# GCP_LOCATION="us-central1"          # Explicitly set GCP Location if needed
-```
-
-### Running Locally
+1. Get a Vertex AI Express API key: https://cloud.google.com/vertex-ai/generative-ai/docs/express-mode/overview
+2. Run with Docker Compose:
 
 ```bash
-# Build the image (if needed)
-docker-compose build
-
-# Start the service in detached mode
-docker-compose up -d
-```
-The service will typically be available at `http://localhost:8050` (check your [`docker-compose.yml`](docker-compose.yml)).
-
-## API Usage
-
-### Endpoints
-
--   `GET /v1/models`: Lists models accessible via the configured credentials/Vertex project.
--   `POST /v1/chat/completions`: OpenAI chat completions API.
--   `POST /v1/messages`: Anthropic Messages API (Claude Code / Anthropic SDK). Streaming SSE and non-streaming.
--   `POST /v1/messages/count_tokens`: Approximate input token count (local estimate).
--   `GET /`: Basic health check/status endpoint.
-
-### Authentication
-
-Requests require the adapter API key via either:
-
-```
-Authorization: Bearer YOUR_API_KEY
+git clone https://github.com/lyn-hart/vertex2openai.git
+cd vertex2openai
+# edit docker-compose.yml: set PROXY_API_KEY and EXPRESS_API_KEYS
+docker compose up -d
 ```
 
-or (Anthropic / Claude Code style):
+The server listens on port **8050**. It refuses to start when `PROXY_API_KEY` or `EXPRESS_API_KEYS` is missing — there are no default credentials.
 
-```
-x-api-key: YOUR_API_KEY
-```
+## Environment variables
 
-Replace `YOUR_API_KEY` with the value you set for the [`API_KEY`](app/config.py:0) environment variable. When both headers are present, Bearer takes precedence.
+### Required
 
-### Example Request (`curl`)
+| Variable | Meaning |
+|---|---|
+| `PROXY_API_KEY` | API key clients must present (`Authorization: Bearer …` or `x-api-key: …`) |
+| `EXPRESS_API_KEYS` | Comma-separated Vertex Express API keys |
+
+### Optional
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `KEY_ROTATION` | `random` | `random` or `roundrobin` selection across express keys |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `FAKE_STREAMING` | `false` | Emit non-streamed responses as SSE chunks |
+| `FAKE_STREAMING_INTERVAL` | `1.0` | Keep-alive interval (seconds) for fake streaming |
+| `RETRY_COUNT` | `3` | Upstream 429 retries after the first attempt |
+| `RETRY_INTERVAL_MS` | `1000` | Fixed interval between 429 retries |
+| `MODELS_CONFIG_URL` | upstream JSON | Remote model list; must contain `vertex_express_models` |
+| `PROXY_URL` | — | Outbound proxy for Google API calls (http/https/socks5) |
+| `SSL_CERT_FILE` | — | Custom CA bundle for upstream TLS verification |
+
+### Renamed variables (migration)
+
+| Old name | New name |
+|---|---|
+| `VERTEX_EXPRESS_API_KEY` | `EXPRESS_API_KEYS` |
+| `API_KEY` (default `123456`) | `PROXY_API_KEY` (no default; required) |
+| `ROUNDROBIN=true/false` | `KEY_ROTATION=random\|roundrobin` |
+
+Removed entirely: `GOOGLE_CREDENTIALS_JSON`, `CREDENTIALS_DIR`, `HUGGINGFACE`, `HUGGINGFACE_API_KEY`, `SAFETY_SCORE`.
+
+## Models and suffixes
+
+The model list comes from `MODELS_CONFIG_URL` (or the built-in fallback in [`app/catalog.py`](app/catalog.py)). Append capability suffixes to any listed model:
+
+| Suffix | Effect |
+|---|---|
+| `-search` | Enable Google Search grounding |
+| `-nothinking` | Disable thinking (budget 0 / 128) |
+| `-max` | Max thinking budget (24576 / 32768) |
+| `-2k`, `-4k` | Image output resolution (gemini-3-pro-image only) |
+
+The `[PAY]`, `[EXPRESS]` prefixes and `-encrypt`, `-encrypt-full`, `-auto`, `-openai`, `-openaisearch` suffixes are no longer recognized.
+
+## Usage
+
+### OpenAI clients
 
 ```bash
-curl -X POST http://localhost:8050/v1/chat/completions \
+curl http://localhost:8050/v1/chat/completions \
+  -H "Authorization: Bearer $PROXY_API_KEY" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your_secure_api_key_here" \
   -d '{
-    "model": "gemini-1.5-flash-latest",
-    "messages": [
-      {"role": "system", "content": "You are a helpful coding assistant."},
-      {"role": "user", "content": "Explain the difference between lists and tuples in Python."}
-    ],
-    "temperature": 0.7,
-    "max_tokens": 150
+    "model": "gemini-3-pro-preview",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "stream": true
   }'
 ```
 
-### Anthropic Messages / Claude Code
-
-`POST /v1/messages` accepts Anthropic Messages request shape and converts to Vertex Gemini. Use **native Gemini model names** (no `claude-*` aliases, no `[EXPRESS]` prefix). Bare names use Express keys when configured, otherwise SA. Optional: `[PAY]` (force SA), `-search`, `-nothinking`, `-max`.
-
-Thinking / effort → Gemini `thinking_budget`:
-
-| Input | Budget |
-|-------|--------|
-| `thinking.budget_tokens` | as-is |
-| effort `none` | 0 |
-| `minimal` | 512 |
-| `low` | 2048 |
-| `medium` (or `thinking: true` / `type=enabled`) | 8192 |
-| `high` | 16384 |
-| `xhigh` | 24576 |
-| `max` / `ultrathink` | 32768 |
-| `adaptive` | default (no budget set) |
-
-Effort may appear as `thinking.effort`, top-level `effort` / `thinking_effort` / `reasoning_effort`, or `output_config.effort`. Model suffixes `-nothinking` / `-max` override.
+### Anthropic clients / Claude Code
 
 ```bash
-# Non-streaming
-curl -sS -X POST http://localhost:8050/v1/messages \
-  -H "x-api-key: your_secure_api_key_here" \
+curl http://localhost:8050/v1/messages \
+  -H "x-api-key: $PROXY_API_KEY" \
   -H "anthropic-version: 2023-06-01" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-2.5-flash",
-    "max_tokens": 256,
-    "messages": [{"role": "user", "content": "Hello"}]
-  }'
-
-# Streaming (Anthropic SSE events)
-curl -N -X POST http://localhost:8050/v1/messages \
-  -H "Authorization: Bearer your_secure_api_key_here" \
-  -H "anthropic-version: 2023-06-01" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gemini-2.5-flash",
-    "max_tokens": 256,
-    "stream": true,
-    "messages": [{"role": "user", "content": "Hello"}]
+    "model": "gemini-3-pro-preview",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
 
-Point Claude Code at this adapter:
+Claude Code: point `ANTHROPIC_BASE_URL` at the adapter and set `ANTHROPIC_AUTH_TOKEN` (or `ANTHROPIC_API_KEY`) to `PROXY_API_KEY`. Claude Code effort levels map to Gemini `thinking_budget`.
 
-```bash
-export ANTHROPIC_BASE_URL=http://localhost:8050
-export ANTHROPIC_API_KEY=your_secure_api_key_here   # or ANTHROPIC_AUTH_TOKEN for Bearer
-export ANTHROPIC_DEFAULT_SONNET_MODEL=gemini-2.5-pro
-export ANTHROPIC_DEFAULT_HAIKU_MODEL=gemini-2.5-flash
-export ANTHROPIC_DEFAULT_OPUS_MODEL=gemini-2.5-pro
-claude -p "say ok"
+## How it works
+
+```
+client ──▶ routes/          protocol handling (OpenAI / Anthropic)
+       ──▶ translate_*      request/response conversion
+       ──▶ streaming.py     stream orchestration, 429 retries, fake streaming
+       ──▶ client.py        Express client construction + project-id fallback
+       ──▶ keys.py          Express key rotation (random / roundrobin)
+       ──▶ catalog.py       model list fetching + built-in fallback
 ```
 
-*(Adjust URL, API key, and model names as needed)*
-
-## Credential Handling Priority
-
-The application selects credentials in this order:
-
-1.  **Vertex AI Express Mode:** If [`VERTEX_EXPRESS_API_KEY`](app/config.py:0) is set *and* the requested model is compatible with Express mode, this key is used via the [`ExpressKeyManager`](app/express_key_manager.py).
-2.  **Service Account Credentials:** If Express mode isn't used/applicable:
-    *   The [`CredentialManager`](app/credentials_manager.py) loads credentials first from the [`GOOGLE_CREDENTIALS_JSON`](app/config.py:0) environment variable (if set).
-    *   If [`GOOGLE_CREDENTIALS_JSON`](app/config.py:0) is *not* set, it loads credentials from `.json` files within the [`CREDENTIALS_DIR`](app/config.py:0).
-    *   If [`ROUNDROBIN`](app/config.py:0) is enabled (`true`), requests using Service Accounts will cycle through the loaded credentials. Otherwise, it typically uses the first valid credential found.
-
-## Key Environment Variables
-
-Managed in [`app/config.py`](app/config.py) and loaded from the environment:
-
--   `API_KEY`: **Required.** Secret key to authenticate requests *to this adapter*.
--   `VERTEX_EXPRESS_API_KEY`: Optional. Your Vertex AI Express API key for simplified authentication.
--   `GOOGLE_CREDENTIALS_JSON`: Optional. String containing the JSON content of one or more service account keys (comma-separated for multiple). Takes precedence over `CREDENTIALS_DIR` for service accounts.
--   `CREDENTIALS_DIR`: Optional. Path *within the container* where service account `.json` files are located. Used only if `GOOGLE_CREDENTIALS_JSON` is not set. (Default: `/app/credentials`)
--   `ROUNDROBIN`: Optional. Set to `"true"` to enable round-robin selection among loaded Service Account credentials. (Default: `"false"`)
--   `GCP_PROJECT_ID`: Optional. Explicitly set the Google Cloud Project ID. If not set, attempts to infer from credentials.
--   `GCP_LOCATION`: Optional. Explicitly set the Google Cloud Location (region). If not set, attempts to infer or uses Vertex AI defaults.
--   `FAKE_STREAMING`: Optional. Set to `"true"` to simulate streaming output for testing. (Default: `"false"`)
--   `FAKE_STREAMING_INTERVAL`: Optional. Interval (seconds) for keep-alive messages during fake streaming. (Default: `1.0`)
--   `RETRY_COUNT`: Optional. Number of retries after an upstream 429 before returning an error. (Default: `3`; set `0` to disable)
--   `RETRY_INTERVAL_MS`: Optional. Fixed interval between upstream 429 retries, in milliseconds. (Default: `1000`)
+When an upstream call returns 404/400, the adapter discovers the numeric project id behind the Express key once and retries against the project-scoped endpoint (needed by some models). 429 responses are retried with a fixed interval; other errors surface to the client.
 
 ## License
 
-This project is licensed under the MIT License. See the [`LICENSE`](LICENSE) file for details.
+See [LICENSE](LICENSE).
