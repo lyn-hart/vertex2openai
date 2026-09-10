@@ -3,7 +3,7 @@ import re
 import json
 import time
 import random # For more unique tool_call_id
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Optional, Tuple
 
 from google.genai import types
 from models import OpenAIRequest, OpenAIMessage, ContentPartText, ContentPartImage
@@ -567,22 +567,38 @@ def convert_to_openai_format(gemini_response: Any, model: str) -> Dict[str, Any]
     return process_gemini_response_to_openai_dict(gemini_response, model)
 
 
+def gemini_finish_reason_to_openai(raw_gemini_finish_reason: Any) -> Optional[str]:
+    """Map a Gemini finish_reason to an OpenAI one, or None if not terminal."""
+    if not raw_gemini_finish_reason:
+        return None
+    if hasattr(raw_gemini_finish_reason, 'name'):
+        raw_gemini_finish_reason_str = raw_gemini_finish_reason.name.upper()
+    else:
+        raw_gemini_finish_reason_str = str(raw_gemini_finish_reason).upper()
+
+    if raw_gemini_finish_reason_str == "STOP": return "stop"
+    elif raw_gemini_finish_reason_str == "MAX_TOKENS": return "length"
+    elif raw_gemini_finish_reason_str == "SAFETY": return "content_filter"
+    elif raw_gemini_finish_reason_str in ["TOOL_CODE", "FUNCTION_CALL"]: return "tool_calls"
+    # Not setting a default here; None means intermediate chunk unless reason is terminal.
+    return None
+
+
+def chunk_has_finish_reason(chunk: Any) -> bool:
+    """True when this Gemini stream chunk carries a terminal finish reason."""
+    candidates = getattr(chunk, 'candidates', None) or []
+    if not candidates:
+        return False
+    return gemini_finish_reason_to_openai(getattr(candidates[0], 'finish_reason', None)) is not None
+
+
 def convert_chunk_to_openai(chunk: Any, model_name: str, response_id: str, candidate_index: int = 0) -> str:
     delta_payload = {}
     openai_finish_reason = None
 
     if hasattr(chunk, 'candidates') and chunk.candidates:
         candidate = chunk.candidates[0] # Process first candidate for streaming
-        raw_gemini_finish_reason = getattr(candidate, 'finish_reason', None)
-        if raw_gemini_finish_reason:
-            if hasattr(raw_gemini_finish_reason, 'name'): raw_gemini_finish_reason_str = raw_gemini_finish_reason.name.upper()
-            else: raw_gemini_finish_reason_str = str(raw_gemini_finish_reason).upper()
-
-            if raw_gemini_finish_reason_str == "STOP": openai_finish_reason = "stop"
-            elif raw_gemini_finish_reason_str == "MAX_TOKENS": openai_finish_reason = "length"
-            elif raw_gemini_finish_reason_str == "SAFETY": openai_finish_reason = "content_filter"
-            elif raw_gemini_finish_reason_str in ["TOOL_CODE", "FUNCTION_CALL"]: openai_finish_reason = "tool_calls"
-            # Not setting a default here; None means intermediate chunk unless reason is terminal.
+        openai_finish_reason = gemini_finish_reason_to_openai(getattr(candidate, 'finish_reason', None))
 
         function_call_detected_in_chunk = False
         if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts') and candidate.content.parts:

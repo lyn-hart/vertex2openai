@@ -219,6 +219,27 @@ class GeminiClientError(Exception):
         self.error_type = error_type
 
 
+class GeminiBlockedError(Exception):
+    """Raised when Gemini blocks a response (safety, recitation, prohibited content).
+
+    Distinct from a transport failure: the request was accepted, the response
+    was refused. Callers report it as an invalid request rather than a 5xx.
+    """
+
+
+def _block_message(chunk: Any) -> Optional[str]:
+    """Return the safety-block message for a response/chunk, or None."""
+    feedback = getattr(chunk, "prompt_feedback", None)
+    block_reason = getattr(feedback, "block_reason", None) if feedback is not None else None
+    if not block_reason:
+        return None
+    message = f"Blocked (Gemini): {block_reason}"
+    block_reason_message = getattr(feedback, "block_reason_message", None)
+    if block_reason_message:
+        message += f" ({block_reason_message})"
+    return message
+
+
 # ── client construction ─────────────────────────────────────────────────────
 
 
@@ -502,6 +523,12 @@ async def stream_gemini_content(
                 config=gen_config_dict,
             )
             async for chunk_item in stream_gen_obj:
+                # A blocked response can still arrive as a normal stream, with
+                # prompt_feedback set and no usable content. Surface it as an
+                # error instead of letting clients see a silently empty answer.
+                blocked_message = _block_message(chunk_item)
+                if blocked_message:
+                    raise GeminiBlockedError(blocked_message)
                 if not has_yielded_any_chunk:
                     _log_429_retry_recovered(model_for_api_call, retry_number)
                 has_yielded_any_chunk = True

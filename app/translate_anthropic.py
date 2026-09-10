@@ -1260,10 +1260,17 @@ class GeminiAnthropicStreamAssembler:
         return events
 
     def error_close(self, message: str, err_type: str = "api_error") -> List[str]:
-        """Emit error then close the stream with message_delta/stop if started."""
+        """Emit an error event and terminate the stream.
+
+        Deliberately omits message_delta: Anthropic has no error stop_reason, so
+        emitting one would report a failed stream as a successful `end_turn`
+        completion. Anthropic clients treat the error event as the failure
+        signal and message_stop as the terminator.
+        """
         events: List[str] = []
         if not self._started:
             events.extend(self.start_events())
+        events.extend(self._close_open())
         events.append(anthropic_stream_error(message, err_type=err_type))
-        events.extend(self.finish())
+        events.append(anthropic_stream_message_stop())
         return events

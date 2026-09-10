@@ -22,6 +22,7 @@ from translate_anthropic import (
     GeminiAnthropicStreamAssembler,
 )
 from client import (
+    GeminiBlockedError,
     _is_upstream_429_error,
     generate_gemini_content,
     parse_model_features,
@@ -102,7 +103,12 @@ async def create_message(
                         yield ev
                 except Exception as e:
                     logger.error(f"Anthropic stream failed for model '{base_model_name}': {e}")
-                    err_type = "rate_limit_error" if _is_upstream_429_error(e) else "api_error"
+                    if isinstance(e, GeminiBlockedError):
+                        err_type = "invalid_request_error"
+                    elif _is_upstream_429_error(e):
+                        err_type = "rate_limit_error"
+                    else:
+                        err_type = "api_error"
                     for ev in assembler.error_close(str(e)[:1024], err_type=err_type):
                         yield ev
 

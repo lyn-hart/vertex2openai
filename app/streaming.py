@@ -11,14 +11,17 @@ from models import OpenAIRequest, OpenAIMessage
 import config as app_config
 from config import VERTEX_REASONING_TAG
 from client import (
+    GeminiBlockedError,
     GeminiClientError,
     generate_gemini_content,
     stream_gemini_content,
     _is_upstream_429_error,
 )
 from translate_openai import (
+    chunk_has_finish_reason,
     convert_to_openai_format,
     convert_chunk_to_openai,
+    create_final_chunk,
     create_openai_error_response,
     is_gemini_response_valid,
 )
@@ -230,6 +233,7 @@ async def gemini_fake_stream_generator(
         err_resp_sse = create_openai_error_response(status_code, sse_err_msg_display, error_type)
         json_payload_error = json.dumps(err_resp_sse)
         yield f"data: {json_payload_error}\n\n"
+        yield create_final_chunk(request_obj.model, "chatcmpl-keepalive")
         yield "data: [DONE]\n\n"
         return
 
@@ -256,22 +260,35 @@ async def execute_gemini_call(
         else: # True Streaming
             response_id_for_stream = f"chatcmpl-realstream-{int(time.time())}"
             async def _gemini_real_stream_generator_inner():
+                saw_finish_reason = False
                 try:
                     async for chunk_item_call in stream_gemini_content(
                         express_key_manager, model_to_call, actual_prompt_for_call, gen_config_dict
                     ):
+                        if chunk_has_finish_reason(chunk_item_call):
+                            saw_finish_reason = True
                         yield convert_chunk_to_openai(chunk_item_call, request_obj.model, response_id_for_stream, 0)
+                    # Gemini normally closes with a chunk carrying the finish
+                    # reason, but a truncated upstream stream may not. Clients
+                    # treat a stream that ends without one as interrupted, so
+                    # always terminate with a terminal chunk.
+                    if not saw_finish_reason:
+                        yield create_final_chunk(request_obj.model, response_id_for_stream)
                     yield "data: [DONE]\n\n"
                     return
                 except Exception as e_stream_call:
                     err_msg_detail_stream = f"Streaming Error (Gemini API, model string: '{model_to_call}'): {type(e_stream_call).__name__} - {str(e_stream_call)}"
                     logger.error(f"{err_msg_detail_stream}")
                     s_err = str(e_stream_call); s_err = s_err[:1024]+"..." if len(s_err)>1024 else s_err
-                    status_code = 429 if _is_upstream_429_error(e_stream_call) else 500
-                    error_type = "rate_limit_error" if status_code == 429 else "server_error"
+                    status_code = 400 if isinstance(e_stream_call, GeminiBlockedError) else (429 if _is_upstream_429_error(e_stream_call) else 500)
+                    error_type = "invalid_request_error" if status_code == 400 else ("rate_limit_error" if status_code == 429 else "server_error")
                     err_resp = create_openai_error_response(status_code, s_err, error_type)
                     j_err = json.dumps(err_resp)
                     yield f"data: {j_err}\n\n"
+                    # Terminate the stream properly even on failure: without a
+                    # chunk carrying a finish_reason the client just sees the
+                    # connection end mid-response.
+                    yield create_final_chunk(request_obj.model, response_id_for_stream)
                     yield "data: [DONE]\n\n"
                     return
             return StreamingResponse(_gemini_real_stream_generator_inner(), media_type="text/event-stream")
