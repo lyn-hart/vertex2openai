@@ -177,6 +177,27 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
     logger.info("Converting OpenAI messages to Gemini format...")
     gemini_messages = []
     pending_function_response_parts = []
+    # OpenAI clients (e.g. AstrBot) send "role": "tool" without a "name", so the
+    # function name has to be recovered. Gemini 3 returns its own functionCall ids
+    # ("call_709603") which do not match the synthetic id pattern built below, so a
+    # regex guess is not enough: remember the name from the assistant tool_call that
+    # carries the same id.
+    tool_call_function_names: Dict[str, str] = {}
+
+    def remember_tool_call_name(tool_call_id: str, function_name: str) -> None:
+        if not tool_call_id or not function_name:
+            return
+        raw_tool_call_id, _ = _decode_tool_call_id_thought_signature(tool_call_id)
+        tool_call_function_names[tool_call_id] = function_name
+        tool_call_function_names.setdefault(raw_tool_call_id, function_name)
+
+    def resolve_tool_call_name(tool_call_id: str) -> str:
+        raw_tool_call_id, _ = _decode_tool_call_id_thought_signature(tool_call_id)
+        return (
+            tool_call_function_names.get(tool_call_id)
+            or tool_call_function_names.get(raw_tool_call_id)
+            or _infer_function_name_from_tool_call_id(tool_call_id)
+        )
 
     def flush_pending_function_response_parts():
         nonlocal pending_function_response_parts
@@ -190,7 +211,7 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
         current_gemini_role = "" 
 
         if role == "tool":
-            function_name = message.name or _infer_function_name_from_tool_call_id(message.tool_call_id)
+            function_name = message.name or resolve_tool_call_name(message.tool_call_id)
             if function_name and message.tool_call_id and message.content is not None:
                 function_response_id, _ = _decode_tool_call_id_thought_signature(message.tool_call_id)
                 tool_output_data = {}
@@ -229,6 +250,7 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
                     parsed_arguments = {} 
                 
                 if function_name:
+                    remember_tool_call_name(tool_call.get("id", ""), function_name)
                     parts.append(_build_function_call_part(
                         function_name=function_name,
                         parsed_arguments=parsed_arguments,
