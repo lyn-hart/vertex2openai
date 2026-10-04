@@ -18,6 +18,7 @@ from client import (
     _is_upstream_429_error,
 )
 from translate_openai import (
+    OpenAIStreamState,
     chunk_has_finish_reason,
     convert_to_openai_format,
     convert_chunk_to_openai,
@@ -149,14 +150,13 @@ async def _chunk_openai_response_dict_for_sse(
                 delta_tc_args = {
                     "tool_calls": [{
                         "index": tc_item_idx,
-                        "id": tool_call_item["id"], 
                         "function": {"arguments": tool_call_item["function"]["arguments"]}
                     }]
                 }
                 yield f"data: {json.dumps({'id': resp_id, 'object': 'chat.completion.chunk', 'created': created_time, 'model': model_name, 'choices': [{'index': choice_idx, 'delta': delta_tc_args, 'finish_reason': None}]})}\n\n"
                 await asyncio.sleep(0.01)
         
-        elif message.get("content") is not None or message.get("reasoning_content") is not None : 
+        if message.get("content") is not None or message.get("reasoning_content") is not None:
             reasoning_content = message.get("reasoning_content", "")
             actual_content = message.get("content") 
 
@@ -198,15 +198,15 @@ async def gemini_fake_stream_generator(
         )
     )
 
-    outer_keep_alive_interval = app_config.FAKE_STREAMING_INTERVAL_SECONDS
-    if outer_keep_alive_interval > 0:
-        while not api_call_task.done():
-            keep_alive_data = {"id": "chatcmpl-keepalive", "object": "chat.completion.chunk", "created": int(time.time()), "model": request_obj.model, "choices": [{"delta": {"content": ""}, "index": 0, "finish_reason": None}]}
-            yield f"data: {json.dumps(keep_alive_data)}\n\n"
-            await asyncio.sleep(outer_keep_alive_interval)
-    
     try:
-        raw_gemini_response = await api_call_task 
+        outer_keep_alive_interval = app_config.FAKE_STREAMING_INTERVAL_SECONDS
+        if outer_keep_alive_interval > 0:
+            while not api_call_task.done():
+                keep_alive_data = {"id": "chatcmpl-keepalive", "object": "chat.completion.chunk", "created": int(time.time()), "model": request_obj.model, "choices": [{"delta": {"content": ""}, "index": 0, "finish_reason": None}]}
+                yield f"data: {json.dumps(keep_alive_data)}\n\n"
+                await asyncio.sleep(outer_keep_alive_interval)
+
+        raw_gemini_response = await api_call_task
         openai_response_dict = convert_to_openai_format(raw_gemini_response, request_obj.model)
         
         if hasattr(raw_gemini_response, 'prompt_feedback') and \
@@ -236,6 +236,12 @@ async def gemini_fake_stream_generator(
         yield create_final_chunk(request_obj.model, "chatcmpl-keepalive")
         yield "data: [DONE]\n\n"
         return
+    finally:
+        # The upstream task is independent of the SSE consumer. Closing or
+        # cancelling the generator must not leave billable work running.
+        if not api_call_task.done():
+            api_call_task.cancel()
+        await asyncio.gather(api_call_task, return_exceptions=True)
 
 
 async def execute_gemini_call(
@@ -261,19 +267,26 @@ async def execute_gemini_call(
             response_id_for_stream = f"chatcmpl-realstream-{int(time.time())}"
             async def _gemini_real_stream_generator_inner():
                 saw_finish_reason = False
+                stream_state = OpenAIStreamState()
                 try:
                     async for chunk_item_call in stream_gemini_content(
                         express_key_manager, model_to_call, actual_prompt_for_call, gen_config_dict
                     ):
                         if chunk_has_finish_reason(chunk_item_call):
                             saw_finish_reason = True
-                        yield convert_chunk_to_openai(chunk_item_call, request_obj.model, response_id_for_stream, 0)
+                        yield convert_chunk_to_openai(
+                            chunk_item_call, request_obj.model, response_id_for_stream,
+                            state=stream_state,
+                        )
                     # Gemini normally closes with a chunk carrying the finish
                     # reason, but a truncated upstream stream may not. Clients
                     # treat a stream that ends without one as interrupted, so
                     # always terminate with a terminal chunk.
                     if not saw_finish_reason:
-                        yield create_final_chunk(request_obj.model, response_id_for_stream)
+                        yield create_final_chunk(
+                            request_obj.model, response_id_for_stream,
+                            finish_reason="tool_calls" if stream_state.has_tool_calls else "stop",
+                        )
                     yield "data: [DONE]\n\n"
                     return
                 except Exception as e_stream_call:

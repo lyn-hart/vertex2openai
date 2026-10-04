@@ -133,6 +133,24 @@ client ──▶ routes/          protocol handling (OpenAI / Anthropic)
 
 When an upstream call returns 404/400, the adapter discovers the numeric project id behind the Express key once and retries against the project-scoped endpoint (needed by some models). 429 responses are retried with a fixed interval; other errors surface to the client.
 
+## Tests and CI
+
+Run the offline regression suite from the repository root:
+
+```bash
+python -m pip install -r app/requirements.txt
+python -m unittest discover -s tests -v
+```
+
+The tests mock upstream model calls and do not require API keys or contact Vertex AI.
+They cover OpenAI/Anthropic conversion, parallel tool calls and thought-signature
+round trips, system instructions, stream cancellation, TLS fallback, and endpoint
+authentication.
+
+Pull requests run the tests and build the Docker image without publishing. Only
+`main` pushes or manual runs on `main` can publish `latest`, after tests pass;
+registry write permission is restricted to the publishing job.
+
 ## License
 
 See [LICENSE](LICENSE).

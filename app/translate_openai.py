@@ -2,7 +2,9 @@ import base64
 import re
 import json
 import time
+import uuid
 import random # For more unique tool_call_id
+from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Tuple
 
 from google.genai import types
@@ -173,6 +175,45 @@ def _extract_markdown_images_to_parts(text: str) -> Tuple[List[types.Part], str]
     
     return parts, remaining_text
 
+def _openai_text_content(content: Any) -> str:
+    """Extract text without changing whitespace in OpenAI content blocks."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    texts = []
+    for part in content:
+        if isinstance(part, ContentPartText):
+            texts.append(part.text)
+        elif isinstance(part, dict) and part.get("type") == "text":
+            text = part.get("text")
+            if isinstance(text, str):
+                texts.append(text)
+    return "\n".join(texts)
+
+
+def _normalize_tool_output(content: Any) -> Dict[str, Any]:
+    """Gemini function responses require an object, even for JSON scalars/lists."""
+    if isinstance(content, list):
+        if content and all(
+            isinstance(part, ContentPartText)
+            or (isinstance(part, dict) and part.get("type") == "text")
+            for part in content
+        ):
+            content = _openai_text_content(content)
+        else:
+            content = [
+                part.model_dump() if hasattr(part, "model_dump") else part
+                for part in content
+            ]
+    if isinstance(content, str):
+        try:
+            content = json.loads(content)
+        except json.JSONDecodeError:
+            pass
+    return content if isinstance(content, dict) else {"result": content}
+
+
 def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
     logger.info("Converting OpenAI messages to Gemini format...")
     gemini_messages = []
@@ -207,6 +248,9 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
 
     for idx, message in enumerate(messages):
         role = message.role
+        if role in ("system", "developer"):
+            # These are sent separately via generation_config.system_instruction.
+            continue
         parts = []
         current_gemini_role = "" 
 
@@ -214,16 +258,7 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
             function_name = message.name or resolve_tool_call_name(message.tool_call_id)
             if function_name and message.tool_call_id and message.content is not None:
                 function_response_id, _ = _decode_tool_call_id_thought_signature(message.tool_call_id)
-                tool_output_data = {}
-                try:
-                    if isinstance(message.content, str) and \
-                       (message.content.strip().startswith("{") and message.content.strip().endswith("}")) or \
-                       (message.content.strip().startswith("[") and message.content.strip().endswith("]")):
-                        tool_output_data = json.loads(message.content)
-                    else: 
-                        tool_output_data = {"result": message.content}
-                except json.JSONDecodeError:
-                    tool_output_data = {"result": str(message.content)}
+                tool_output_data = _normalize_tool_output(message.content)
 
                 parts.append(_build_function_response_part(
                     function_name=function_name,
@@ -308,9 +343,7 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
                  logger.info(f"Skipping message {idx} (Role: {role}) due to empty content string or list.")
                  continue
 
-            current_gemini_role = role
-            if current_gemini_role == "system": current_gemini_role = "user"
-            elif current_gemini_role == "assistant": current_gemini_role = "model"
+            current_gemini_role = "model" if role == "assistant" else role
             
             if current_gemini_role not in SUPPORTED_ROLES:
                 logger.info(f"Warning: Role '{current_gemini_role}' (from original '{role}') is not in SUPPORTED_ROLES {SUPPORTED_ROLES}. Mapping to 'user'.")
@@ -539,14 +572,14 @@ def process_gemini_response_to_openai_dict(gemini_response_obj: Any, request_mod
                         openai_finish_reason = "tool_calls" # Override if a tool call is made
                         function_call_detected = True
             
-            if not function_call_detected:
-                reasoning_str, normal_content_str = parse_gemini_response_for_reasoning_and_content(candidate)
-                citations = extract_grounding_citations(candidate)
-                if citations:
-                    normal_content_str = (normal_content_str or "") + citations
-                message_payload["content"] = normal_content_str
-                if reasoning_str:
-                    message_payload['reasoning_content'] = reasoning_str
+            # Text/thoughts can accompany function calls in the same response.
+            reasoning_str, normal_content_str = parse_gemini_response_for_reasoning_and_content(candidate)
+            citations = extract_grounding_citations(candidate)
+            if citations:
+                normal_content_str = (normal_content_str or "") + citations
+            message_payload["content"] = normal_content_str or (None if function_call_detected else "")
+            if reasoning_str:
+                message_payload['reasoning_content'] = reasoning_str
             
             choice_item = {"index": i, "message": message_payload, "finish_reason": openai_finish_reason}
             if hasattr(candidate, 'logprobs') and candidate.logprobs is not None:
@@ -614,77 +647,88 @@ def chunk_has_finish_reason(chunk: Any) -> bool:
     return gemini_finish_reason_to_openai(getattr(candidates[0], 'finish_reason', None)) is not None
 
 
-def convert_chunk_to_openai(chunk: Any, model_name: str, response_id: str, candidate_index: int = 0) -> str:
-    delta_payload = {}
+@dataclass
+class OpenAIStreamState:
+    """Tool-call state for one streamed choice; never shared between requests."""
+
+    tool_call_indexes: Dict[str, int] = field(default_factory=dict)
+
+    @property
+    def has_tool_calls(self) -> bool:
+        return bool(self.tool_call_indexes)
+
+
+def convert_chunk_to_openai(
+    chunk: Any,
+    model_name: str,
+    response_id: str,
+    candidate_index: int = 0,
+    state: Optional[OpenAIStreamState] = None,
+) -> str:
+    if state is None:
+        state = OpenAIStreamState()
+    delta_payload: Dict[str, Any] = {}
     openai_finish_reason = None
 
-    if hasattr(chunk, 'candidates') and chunk.candidates:
-        candidate = chunk.candidates[0] # Process first candidate for streaming
+    if getattr(chunk, 'candidates', None):
+        candidate = chunk.candidates[0]
         openai_finish_reason = gemini_finish_reason_to_openai(getattr(candidate, 'finish_reason', None))
 
-        function_call_detected_in_chunk = False
-        if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts') and candidate.content.parts:
-            for part in candidate.content.parts:
-                if hasattr(part, 'function_call') and part.function_call is not None: # Kilo Code: Added 'is not None' check
-                    fc = part.function_call
-                    raw_tool_call_id = getattr(fc, 'id', None) or f"call_{response_id}_{candidate_index}_{fc.name.replace(' ', '_')}_{int(time.time()*10000 + random.randint(0,9999))}"
-                    tool_call_id = _encode_tool_call_id_with_thought_signature(raw_tool_call_id, getattr(part, 'thought_signature', None))
-                    
-                    current_tool_call_delta = {
-                        "index": 0, 
-                        "id": tool_call_id,
-                        "type": "function",
-                        "function": {"name": fc.name}
-                    }
-                    if fc.args is not None: # Gemini usually sends full args.
-                        current_tool_call_delta["function"]["arguments"] = json.dumps(fc.args)
-                    else: # If args could be streamed (rare for Gemini FunctionCall part)
-                        current_tool_call_delta["function"]["arguments"] = "" 
+        content = getattr(candidate, 'content', None)
+        for part in getattr(content, 'parts', None) or []:
+            fc = getattr(part, 'function_call', None)
+            if fc is None:
+                continue
+            raw_tool_call_id = getattr(fc, 'id', None)
+            if not raw_tool_call_id:
+                raw_tool_call_id = f"call_{response_id}_{candidate_index}_{fc.name.replace(' ', '_')}_{uuid.uuid4().int}"
+            is_new_call = raw_tool_call_id not in state.tool_call_indexes
+            tool_index = state.tool_call_indexes.setdefault(raw_tool_call_id, len(state.tool_call_indexes))
+            function_delta: Dict[str, Any] = {}
+            tool_delta: Dict[str, Any] = {"index": tool_index, "function": function_delta}
+            if is_new_call:
+                tool_delta.update({
+                    "id": _encode_tool_call_id_with_thought_signature(
+                        raw_tool_call_id, getattr(part, 'thought_signature', None)
+                    ),
+                    "type": "function",
+                })
+                function_delta["name"] = fc.name
+            if fc.args is not None:
+                function_delta["arguments"] = json.dumps(fc.args)
+            elif is_new_call:
+                function_delta["arguments"] = ""
+            delta_payload.setdefault("tool_calls", []).append(tool_delta)
 
-                    if "tool_calls" not in delta_payload:
-                        delta_payload["tool_calls"] = []
-                    delta_payload["tool_calls"].append(current_tool_call_delta)
-                    
-                    delta_payload["content"] = None 
-                    function_call_detected_in_chunk = True
-                    # If this chunk also has the finish_reason for tool_calls, it will be set.
-                    break 
+        # Gemini uses STOP for successful function calls too. The terminal
+        # chunk may arrive after the calls, so consult the whole stream state.
+        if openai_finish_reason == "stop" and state.has_tool_calls:
+            openai_finish_reason = "tool_calls"
 
-        if not function_call_detected_in_chunk:
-            reasoning_text, normal_text = parse_gemini_response_for_reasoning_and_content(candidate)
+        reasoning_text, normal_text = parse_gemini_response_for_reasoning_and_content(candidate)
+        if openai_finish_reason is not None:
+            citations = extract_grounding_citations(candidate)
+            if citations:
+                normal_text = (normal_text or "") + citations
+        if reasoning_text:
+            delta_payload['reasoning_content'] = reasoning_text
+        if normal_text:
+            delta_payload['content'] = normal_text
+        elif delta_payload.get("tool_calls"):
+            delta_payload['content'] = None
 
-            # Grounding metadata arrives on the terminal chunk; emit sources once there.
-            if openai_finish_reason is not None:
-                citations = extract_grounding_citations(candidate)
-                if citations:
-                    normal_text = (normal_text or "") + citations
-
-            if reasoning_text: delta_payload['reasoning_content'] = reasoning_text
-            if normal_text: # Only add content if it's non-empty
-                delta_payload['content'] = normal_text
-            elif not reasoning_text and not delta_payload.get("tool_calls") and openai_finish_reason is None:
-                # If no other content and not a terminal chunk, send empty content string
-                delta_payload['content'] = ""
-    
     if not delta_payload and openai_finish_reason is None:
-        # This case ensures that even if a chunk is completely empty (e.g. keep-alive or error scenario not caught above)
-        # and it's not a terminal chunk, we still send a delta with empty content.
         delta_payload['content'] = ""
 
     chunk_data = {
         "id": response_id, "object": "chat.completion.chunk", "created": int(time.time()), "model": model_name,
         "choices": [{"index": candidate_index, "delta": delta_payload, "finish_reason": openai_finish_reason}]
     }
-    # Logprobs are typically not in streaming deltas for OpenAI.
     return f"data: {json.dumps(chunk_data)}\n\n"
 
-def create_final_chunk(model: str, response_id: str, candidate_count: int = 1) -> str:
-    # This function might need adjustment if the finish reason isn't always "stop"
-    # For now, it's kept as is, but tool_calls might require a different final chunk structure
-    # if not handled by the last delta from convert_chunk_to_openai.
-    # However, OpenAI expects the last content/tool_call delta to carry the finish_reason.
-    # This function is more of a safety net or for specific scenarios.
-    choices = [{"index": i, "delta": {}, "finish_reason": "stop"} for i in range(candidate_count)]
+def create_final_chunk(model: str, response_id: str, candidate_count: int = 1, finish_reason: str = "stop") -> str:
+    """Emit a terminal chunk when the upstream did not supply one."""
+    choices = [{"index": i, "delta": {}, "finish_reason": finish_reason} for i in range(candidate_count)]
     final_chunk_data = {"id": response_id, "object": "chat.completion.chunk", "created": int(time.time()), "model": model, "choices": choices}
     return f"data: {json.dumps(final_chunk_data)}\n\n"
 
@@ -724,6 +768,14 @@ def _apply_thinking_params(request: OpenAIRequest, config: Dict[str, Any]) -> No
 
 def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
     config: Dict[str, Any] = {}
+    system_texts = [
+        _openai_text_content(message.content)
+        for message in request.messages
+        if message.role in ("system", "developer")
+    ]
+    system_instruction = "\n\n".join(text for text in system_texts if text)
+    if system_instruction:
+        config["system_instruction"] = system_instruction
 
     # Request-body thinking params -> thinking_config
     _apply_thinking_params(request, config)

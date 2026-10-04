@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import re
+import ssl
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
@@ -353,13 +354,17 @@ async def discover_project_id(api_key: str) -> str:
     )
     payload = {"contents": [{"role": "user", "parts": [{"text": "test"}]}]}
 
+    ssl_context = (
+        ssl.create_default_context(cafile=app_config.SSL_CERT_FILE)
+        if app_config.SSL_CERT_FILE else True
+    )
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(
                 error_url,
                 json=payload,
                 proxy=app_config.PROXY_URL,
-                ssl=app_config.SSL_CERT_FILE,
+                ssl=ssl_context,
             ) as response:
                 response_text = await response.text()
                 try:
