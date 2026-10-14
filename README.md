@@ -131,7 +131,7 @@ client ──▶ routes/          protocol handling (OpenAI / Anthropic)
        ──▶ catalog.py       model list fetching + built-in fallback
 ```
 
-When an upstream call returns 404/400, the adapter discovers the numeric project id behind the Express key once and retries against the project-scoped endpoint (needed by some models). 429 responses are retried with a fixed interval; other errors surface to the client.
+When an upstream call returns 404, the adapter discovers the numeric project id behind the Express key once and retries against the project-scoped global endpoint (needed by models that a regional endpoint does not serve, e.g. `gemini-4-argon`). The `(key, model)` pair is remembered, so later calls go straight to the global endpoint instead of paying for a guaranteed 404 on every request. 400 responses never trigger the fallback — they mean the request body was rejected, which switching endpoints cannot fix. 429 responses are retried with a fixed interval; other errors surface to the client.
 
 ## Tests and CI
 

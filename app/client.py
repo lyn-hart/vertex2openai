@@ -3,8 +3,10 @@ Vertex Express client construction and upstream call helpers.
 
 Merges the former gemini_client.py and project_id_discovery.py. All upstream
 calls go through a google-genai client built from a Vertex Express API key;
-when a call fails with 404/400 the client is rebuilt once against the
-discovered numeric project id (needed for some models on the global endpoint).
+when a call fails with 404 the client is rebuilt once against the discovered
+numeric project id (needed for global-only models such as gemini-4-argon,
+which the SDK's default regional endpoint does not serve). That fallback is
+remembered per (key, model) so later calls skip the guaranteed 404.
 """
 
 from __future__ import annotations
@@ -326,16 +328,52 @@ def _build_plain_client(api_key: str) -> Any:
 
 
 def _build_project_client(api_key: str, project_id: str) -> Any:
-    """Express client pinned to the discovered project's global endpoint."""
+    """Express client pinned to the discovered project's global endpoint.
+
+    Models such as gemini-4-argon are not served from the regional endpoint an
+    Express key defaults to (the SDK picks us-central1 when no location is
+    given), so calls must be addressed as
+    /v1/projects/<id>/locations/global/... The base URL therefore already
+    carries /v1 and the SDK's own version segment is cleared so it is not
+    repeated.
+    """
     base_url = f"https://aiplatform.googleapis.com/v1/projects/{project_id}/locations/global"
     http_options = _get_http_options()
     if http_options is not None:
         http_options.base_url = base_url
+        http_options.api_version = ""
     else:
-        http_options = types.HttpOptions(base_url=base_url)
+        http_options = types.HttpOptions(base_url=base_url, api_version="")
     client = genai.Client(vertexai=True, api_key=api_key, http_options=http_options)
-    client._api_client._http_options.api_version = None
+    # Some SDK versions re-apply their default api version inside the api
+    # client even when an explicit base URL is supplied; clearing it there
+    # keeps the /v1 encoded in base_url as the only version segment.
+    api_client = getattr(client, "_api_client", None)
+    internal_options = getattr(api_client, "_http_options", None)
+    if internal_options is not None:
+        internal_options.api_version = None
     return client
+
+
+def _build_express_client(api_key: str, model: str) -> Any:
+    """Express client for a model, honouring a previously discovered
+    endpoint mismatch.
+
+    The first call for a global-only model goes out on the SDK-default
+    regional endpoint, 404s, and is retried against the project-scoped global
+    endpoint. Once that happened the model is remembered per API key, so later
+    requests skip the doomed attempt instead of paying another round trip for
+    a guaranteed 404.
+    """
+    if is_project_scoped_model(api_key, model):
+        project_id = PROJECT_ID_CACHE.get(api_key)
+        if project_id:
+            logger.info(
+                "Model '%s' needs the global endpoint (learned earlier); using cached project ID: %s",
+                model, project_id,
+            )
+            return _build_project_client(api_key, project_id)
+    return _build_plain_client(api_key)
 
 
 async def resolve_gemini_client(
@@ -365,7 +403,7 @@ async def resolve_gemini_client(
             continue
         original_idx, key_val = key_tuple
         try:
-            client = _build_plain_client(key_val)
+            client = _build_express_client(key_val, model)
             logger.info(
                 "Attempt %d/%d - Using Vertex Express Mode SDK for model %s (base: %s) with API key (original index: %d).",
                 attempt + 1, total_keys, model, base_model_name, original_idx,
@@ -389,6 +427,22 @@ async def resolve_gemini_client(
 
 # Global cache for project IDs: {api_key: project_id}
 PROJECT_ID_CACHE: Dict[str, str] = {}
+
+# (api_key, base_model_name) pairs whose model is only served from the
+# project-scoped global endpoint. Populated the first time the default
+# (regional) endpoint answers 404 for that model + key.
+_PROJECT_SCOPED_MODELS: set = set()
+
+
+def mark_project_scoped_model(api_key: str, model: str) -> None:
+    """Remember that `model` is not served on the default regional endpoint
+    for this API key."""
+    _PROJECT_SCOPED_MODELS.add((api_key, model))
+
+
+def is_project_scoped_model(api_key: str, model: str) -> bool:
+    """True when the model is known to need the global endpoint for this key."""
+    return (api_key, model) in _PROJECT_SCOPED_MODELS
 
 
 async def discover_project_id(api_key: str) -> str:
@@ -481,9 +535,15 @@ def _is_upstream_429_error(exc: Exception) -> bool:
     )
 
 
-def _is_not_found_error(exc: Exception) -> bool:
-    """404/400 from upstream — conditions that trigger the project-id fallback."""
-    return _get_upstream_status_code(exc) in (404, 400)
+def _is_default_endpoint_miss(exc: Exception) -> bool:
+    """True for a 404 from upstream — the endpoint/model mismatch that the
+    project-id fallback can fix.
+
+    400 is deliberately excluded: it means the request body was rejected (for
+    example a thinking budget the model does not take), which no amount of
+    endpoint switching repairs.
+    """
+    return _get_upstream_status_code(exc) == 404
 
 
 async def _sleep_before_429_retry(exc: Exception, retry_number: int, model_name: str) -> None:
@@ -517,7 +577,8 @@ async def generate_gemini_content(
     """
     Non-streaming generate_content. Builds an Express client, retries 429s,
     and rebuilds the client once against the discovered project id when the
-    first attempt fails with 404/400.
+    first attempt fails with 404. Models that needed that fallback are
+    remembered, so later calls address the global endpoint directly.
     """
     client, api_key = await resolve_gemini_client(
         model=model_for_api_call,
@@ -536,14 +597,15 @@ async def generate_gemini_content(
             _log_429_retry_recovered(model_for_api_call, retry_number)
             return response
         except Exception as exc:
-            if _is_not_found_error(exc) and not used_project_fallback:
+            if _is_default_endpoint_miss(exc) and not used_project_fallback:
                 used_project_fallback = True
                 logger.warning(
-                    "Upstream %s for Gemini model '%s' on the default endpoint "
+                    "Upstream 404 for Gemini model '%s' on the default endpoint "
                     "(error: %s). Retrying once with a project-id base URL.",
-                    _get_upstream_status_code(exc), model_for_api_call, str(exc)[:512],
+                    model_for_api_call, str(exc)[:512],
                 )
                 project_id = await discover_project_id(api_key)
+                mark_project_scoped_model(api_key, model_for_api_call)
                 client = _build_project_client(api_key, project_id)
                 continue
             if _is_upstream_429_error(exc) and retry_number < app_config.RETRY_COUNT:
@@ -562,9 +624,10 @@ async def stream_gemini_content(
     """
     Async generator of raw Gemini stream chunks.
 
-    Retries 429s before the first chunk; if the stream setup fails with
-    404/400 before any chunk has been yielded, rebuilds the client once
-    against the discovered project id and retries.
+    Retries 429s before the first chunk; if the stream setup fails with 404
+    before any chunk has been yielded, rebuilds the client once against the
+    discovered project id and retries. Models that needed that fallback are
+    remembered, so later streams address the global endpoint directly.
     """
     client, api_key = await resolve_gemini_client(
         model=model_for_api_call,
@@ -595,17 +658,18 @@ async def stream_gemini_content(
             return
         except Exception as e_stream:
             if (
-                _is_not_found_error(e_stream)
+                _is_default_endpoint_miss(e_stream)
                 and not has_yielded_any_chunk
                 and not used_project_fallback
             ):
                 used_project_fallback = True
                 logger.warning(
-                    "Upstream %s for Gemini model '%s' on the default endpoint "
+                    "Upstream 404 for Gemini model '%s' on the default endpoint "
                     "(error: %s). Retrying stream once with a project-id base URL.",
-                    _get_upstream_status_code(e_stream), model_for_api_call, str(e_stream)[:512],
+                    model_for_api_call, str(e_stream)[:512],
                 )
                 project_id = await discover_project_id(api_key)
+                mark_project_scoped_model(api_key, model_for_api_call)
                 client = _build_project_client(api_key, project_id)
                 continue
             if (
