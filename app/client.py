@@ -67,9 +67,10 @@ def parse_model_features(model: str) -> ModelFeatures:
 # ── thinking parameter mapping ──────────────────────────────────────────────
 
 # Effort labels accepted from clients (OpenAI reasoning_effort and Anthropic
-# effort). For Gemini 2.5 models these map to token budgets (2.5 only accepts
-# thinking_budget); for Gemini 3.x they map to thinking_level enum values
-# (xhigh/max collapse to HIGH — the 3-series enum tops out there).
+# effort). For Gemini 2.5 models these map to token budgets (2.5 is the only
+# family that still takes thinking_budget); for Gemini 3.x/4.x they map to
+# thinking_level enum values (xhigh/max collapse to HIGH — the enum tops out
+# there).
 EFFORT_TO_THINKING_BUDGET: dict = {
     "none": 0,
     "minimal": 512,
@@ -98,29 +99,62 @@ EFFORT_TO_THINKING_LEVEL: dict = {
 # (gemini-2.5-flash rejects budgets above 24576).
 THINKING_BUDGET_CEILING = 24576
 
+# Model families that still accept a numeric thinking_budget. Starting with
+# Gemini 3.5 the service rejects it with "Thinking budget is not supported for
+# this model. Use thinking level instead.", so 3.5+/4.x/unknown generations are
+# treated as level-only and get their budget approximated by a level.
+_THINKING_BUDGET_MODEL_PREFIXES = (
+    "gemini-2.5-",
+    "gemini-3-",      # 3.0 aliases: gemini-3-flash-preview, gemini-3-pro-image
+    "gemini-3.0-",
+    "gemini-3.1-",
+    "gemini-3.2-",
+    "gemini-3.3-",
+    "gemini-3.4-",
+)
 
-def is_gemini3_model(base_model_name: str) -> bool:
-    """True for Gemini 3.x models, which take thinking_level instead of
-    (or in addition to) thinking_budget."""
-    return base_model_name.startswith("gemini-3")
+
+def supports_thinking_budget(base_model_name: str) -> bool:
+    """True for models that still accept a numeric thinking_budget.
+
+    Gemini 2.5 and Gemini 3.0-3.4 accept token budgets; Gemini 3.5+, 4.x and
+    anything newer reject them and require a thinking_level.
+    """
+    return (base_model_name or "").startswith(_THINKING_BUDGET_MODEL_PREFIXES)
 
 
-# Thinking levels each model family accepts, low → high. Models not listed
-# here fall back to the full set. Verified against the Gemini thinking docs:
-# 3.8/3.7-flash and 3.1-pro-preview omit MINIMAL; pro-preview has no MEDIUM.
-_GEMINI3_LEVEL_SUPPORT: dict = {
+def uses_thinking_level(base_model_name: str) -> bool:
+    """True for Gemini 3.x and newer, whose effort labels map to the
+    thinking_level enum. Gemini 2.5 keeps token budgets."""
+    return not (base_model_name or "").startswith("gemini-2.5")
+
+
+# Thinking levels each model family accepts, low → high, per the Gemini
+# thinking docs (verified 2026-09): 3.8/3.7-flash and 3.1-pro-preview omit
+# MINIMAL; 3-pro-preview has no MEDIUM; the lite image model only has
+# MINIMAL and HIGH. Models not listed fall back to the full set.
+_THINKING_LEVELS_FULL = ("MINIMAL", "LOW", "MEDIUM", "HIGH")
+_THINKING_LEVEL_SUPPORT: dict = {
     "gemini-3.8-flash": ("LOW", "MEDIUM", "HIGH"),
     "gemini-3.7-flash": ("LOW", "MEDIUM", "HIGH"),
+    "gemini-3.6-flash": _THINKING_LEVELS_FULL,
+    "gemini-3.5-flash-lite": _THINKING_LEVELS_FULL,
+    "gemini-3.5-flash": _THINKING_LEVELS_FULL,
     "gemini-3.1-pro-preview": ("LOW", "MEDIUM", "HIGH"),
+    "gemini-3.1-flash-lite-image": ("MINIMAL", "HIGH"),
+    "gemini-3-flash-preview": _THINKING_LEVELS_FULL,
+    "gemini-3-pro-preview": ("LOW", "HIGH"),
 }
-_GEMINI3_LEVELS_FULL = ("MINIMAL", "LOW", "MEDIUM", "HIGH")
 
 
 def _supported_levels(base_model_name: str) -> tuple:
-    for prefix, levels in _GEMINI3_LEVEL_SUPPORT.items():
-        if base_model_name.startswith(prefix):
-            return levels
-    return _GEMINI3_LEVELS_FULL
+    base = base_model_name or ""
+    # Longest prefix first so "gemini-3.5-flash-lite" wins over
+    # "gemini-3.5-flash".
+    for prefix in sorted(_THINKING_LEVEL_SUPPORT, key=len, reverse=True):
+        if base.startswith(prefix):
+            return _THINKING_LEVEL_SUPPORT[prefix]
+    return _THINKING_LEVELS_FULL
 
 
 def _snap_level(level: str, supported: tuple) -> str:
@@ -128,13 +162,25 @@ def _snap_level(level: str, supported: tuple) -> str:
     e.g. MINIMAL on a model whose lowest level is LOW becomes LOW."""
     if level in supported:
         return level
-    order = _GEMINI3_LEVELS_FULL
+    order = _THINKING_LEVELS_FULL
     requested_idx = order.index(level) if level in order else 0
     # First supported level at or above the request; else the highest.
     for candidate in order[requested_idx:]:
         if candidate in supported:
             return candidate
     return supported[-1]
+
+
+# Canonical token budgets behind the effort labels, used to approximate a
+# numeric budget with a level on models that no longer accept budgets.
+_BUDGET_LEVEL_ANCHORS = ((512, "MINIMAL"), (2048, "LOW"), (8192, "MEDIUM"), (16384, "HIGH"))
+
+
+def _level_for_budget(budget: int) -> str:
+    """Approximate a token budget with the nearest thinking_level."""
+    if budget <= 0:
+        return "MINIMAL"
+    return min(_BUDGET_LEVEL_ANCHORS, key=lambda anchor: abs(anchor[0] - budget))[1]
 
 
 def resolve_thinking_config(
@@ -146,20 +192,28 @@ def resolve_thinking_config(
     Translate client thinking params into a Gemini thinking_config fragment.
 
     Returns {} when neither param is given. Numeric budgets win over effort
-    labels. On Gemini 3.x an effort label maps to a thinking_level enum
-    (the service converts it to the model's proper budget); levels the
-    model does not support are rounded up to the nearest supported one.
-    Gemini 2.5 has no thinking_level — labels map to token budgets.
+    labels. Gemini 2.5 and Gemini 3.0-3.4 accept thinking_budget; on Gemini
+    3.5+/4.x a numeric budget is converted to the nearest thinking_level
+    (the upstream rejects thinking_budget there with a 400). Effort labels map
+    to thinking_level on every 3.x/4.x model; levels the model does not accept
+    are rounded up to the nearest supported one.
     """
     base = base_model_name or ""
 
     if budget is not None:
         clamped = max(0, min(int(budget), THINKING_BUDGET_CEILING))
-        return {"thinking_budget": clamped, "include_thoughts": clamped > 0}
+        if supports_thinking_budget(base):
+            return {"thinking_budget": clamped, "include_thoughts": clamped > 0}
+        level = _snap_level(_level_for_budget(clamped), _supported_levels(base))
+        logger.info(
+            "thinking_budget is not supported by %s; using thinking_level %s instead.",
+            base, level,
+        )
+        return {"thinking_level": level, "include_thoughts": clamped > 0}
 
     if effort is not None:
         key = str(effort).strip().lower()
-        if is_gemini3_model(base):
+        if uses_thinking_level(base):
             level = EFFORT_TO_THINKING_LEVEL.get(key)
             if level is None:
                 return {}

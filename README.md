@@ -82,10 +82,10 @@ Labels are routed by model generation:
 
 | Model | Param sent upstream | Label mapping |
 |---|---|---|
-| Gemini 2.5.x | `thinking_budget` (tokens) | `none`=0, `minimal`=512, `low`=2048, `medium`=8192, `high`=16384, `xhigh`/`max`=24576 (clamped to 24576) |
-| Gemini 3.x | `thinking_level` enum | `none`/`minimal`→`MINIMAL`, `low`→`LOW`, `medium`→`MEDIUM`, `high`/`xhigh`/`max`→`HIGH` |
+| Gemini 2.5.x, 3.0–3.4 | `thinking_budget` (tokens) | `none`=0, `minimal`=512, `low`=2048, `medium`=8192, `high`=16384, `xhigh`/`max`=24576 (clamped to 24576) |
+| Gemini 3.5+, 4.x and newer | `thinking_level` enum | `none`/`minimal`→`MINIMAL`, `low`→`LOW`, `medium`→`MEDIUM`, `high`/`xhigh`/`max`→`HIGH` |
 
-Two caveats for Gemini 3.x: levels use the enum, so request a numeric `thinking_budget` / `budget_tokens` to control the exact budget; and levels a model does not accept are rounded **up** to the nearest supported one (e.g. `gemini-3.8-flash` has no `MINIMAL`, so `none`/`minimal` become `LOW` — there is no way to fully disable thinking on most 3.x models).
+Two caveats for the level-based models: a numeric `thinking_budget` / `budget_tokens` is no longer accepted upstream (it answers `400 Thinking budget is not supported for this model. Use thinking level instead.`), so it is converted to the nearest level (`≤512`→`MINIMAL`, `≤2048`→`LOW`, `≤8192`→`MEDIUM`, above→`HIGH`) while `include_thoughts` still follows `budget > 0`; and levels a model does not accept are rounded **up** to the nearest supported one (e.g. `gemini-3.8-flash` has no `MINIMAL`, so `none`/`minimal` become `LOW` — there is no way to fully disable thinking on most 3.x+ models).
 
 **Known upstream limitation:** the Vertex endpoint does not serve Google Search grounding together with function calling — when a request carries both, the search tool is dropped and the model only sees the functions (a WARNING is logged server-side). Ask for search only in requests without function tools.
 

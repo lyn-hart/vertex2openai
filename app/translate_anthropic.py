@@ -704,7 +704,10 @@ def create_anthropic_generation_config(
         config["thinking_config"]["include_thoughts"] = False
 
     # Priority: request.thinking → top-level effort fields.
-    # Gemini 3.x: effort labels map to thinking_level enums; 2.5: budgets.
+    # Gemini 3.5+/4.x only accept thinking_level (a numeric thinking_budget is
+    # rejected with a 400); Gemini 2.5 and 3.0-3.4 take token budgets.
+    from client import resolve_thinking_config
+
     anth_budget = _thinking_budget_from_anthropic(getattr(request, "thinking", None))
     if anth_budget is None:
         anth_budget = _effort_from_request(request)
@@ -716,13 +719,13 @@ def create_anthropic_generation_config(
     # generation-based routing).
     explicit_budget = _explicit_budget_tokens(getattr(request, "thinking", None))
     if anth_effort is not None:
-        from client import resolve_thinking_config
         resolved = resolve_thinking_config(base_model_name, effort=anth_effort, budget=explicit_budget)
         if resolved:
             config["thinking_config"].update(resolved)
     elif anth_budget is not None:
-        config["thinking_config"]["thinking_budget"] = anth_budget
-        config["thinking_config"]["include_thoughts"] = anth_budget > 0
+        resolved = resolve_thinking_config(base_model_name, budget=anth_budget)
+        if resolved:
+            config["thinking_config"].update(resolved)
 
     return config
 

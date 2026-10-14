@@ -147,3 +147,6 @@ refactoring_plan.md
 multiple_credentials_implementation.md
 # Claude Code local settings
 .claude/
+
+# Serena MCP local project config
+.serena/
